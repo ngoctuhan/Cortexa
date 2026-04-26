@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package cortexa.v1;
+
+import "proto/common.proto";
+
+option go_package = "github.com/cortexa/cortexa/proto/v1;cortexav1";
+
+// Entity and message definitions for the Cortexa service.
+
+// Message represents a chat message.
+message Message {
+  UUID id = 1;
+  UUID tenant_id = 2;
+  UUID session_id = 3;
+  UUID user_id = 4;
+  Role role = 5;
+  string content = 6;
+  int32 token_count = 7;
+  int64 created_at = 8;  // Unix timestamp in seconds
+}
+
+// EntityFact represents a extracted fact about an entity.
+message EntityFact {
+  string entity_name = 1;
+  EntityType entity_type = 2;
+  EntityAttribute attribute = 3;
+  string value = 4;
+  string source_quote = 5;
+  double confidence = 6;
+}
+
+// RagChunk represents a chunk of text with vector similarity.
+message RagChunk {
+  UUID id = 1;
+  string content = 2;
+  double cosine_sim = 3;
+  double score = 4;
+  double importance = 5;
+  int64 created_at = 6;  // Unix timestamp in seconds
+}
+
+// MemoryRecord represents a structured memory record.
+message MemoryRecord {
+  UUID id = 1;
+  MemoryType type = 2;
+  string payload = 3;  // JSON string
+  double importance = 4;
+  int32 access_count = 5;
+  int64 last_accessed_at = 6;  // Unix timestamp in seconds
+  int64 created_at = 7;  // Unix timestamp in seconds
+}

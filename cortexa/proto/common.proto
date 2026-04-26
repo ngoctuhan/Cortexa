@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package cortexa.v1;
+
+option go_package = "github.com/cortexa/cortexa/proto/v1;cortexav1";
+
+// Common types and enums used across the Cortexa service.
+
+// Role represents the sender of a message.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ASSISTANT = 2;
+  ROLE_SYSTEM = 3;
+}
+
+// EntityType represents the type of entity extracted.
+enum EntityType {
+  ENTITY_TYPE_UNSPECIFIED = 0;
+  ENTITY_TYPE_PERSON = 1;
+  ENTITY_TYPE_PLACE = 2;
+  ENTITY_TYPE_ORG = 3;
+  ENTITY_TYPE_CONTACT = 4;
+  ENTITY_TYPE_THING = 5;
+  ENTITY_TYPE_SELF = 6;
+}
+
+// EntityAttribute represents the type of attribute for an entity.
+enum EntityAttribute {
+  ENTITY_ATTRIBUTE_UNSPECIFIED = 0;
+  ENTITY_ATTRIBUTE_EMAIL = 1;
+  ENTITY_ATTRIBUTE_PHONE = 2;
+  ENTITY_ATTRIBUTE_JOB = 3;
+  ENTITY_ATTRIBUTE_BIRTHDAY = 4;
+  ENTITY_ATTRIBUTE_ADDRESS = 5;
+  ENTITY_ATTRIBUTE_LIKES = 6;
+  ENTITY_ATTRIBUTE_OWNS = 7;
+  ENTITY_ATTRIBUTE_WORKS_AT = 8;
+  ENTITY_ATTRIBUTE_RELATIONSHIP = 9;
+}
+
+// MemoryType represents the type of memory record.
+enum MemoryType {
+  MEMORY_TYPE_UNSPECIFIED = 0;
+  MEMORY_TYPE_RAG_CHUNK = 1;
+  MEMORY_TYPE_LIFE_EVENT = 2;
+  MEMORY_TYPE_USER_CHARACTER = 3;
+  MEMORY_TYPE_PERSONA_CONTEXT = 4;
+}
+
+// UUID wrapper type for better type safety.
+message UUID {
+  string value = 1;
+}

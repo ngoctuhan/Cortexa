@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package cortexa.v1;
+
+import "proto/common.proto";
+import "proto/entities.proto";
+
+option go_package = "github.com/cortexa/cortexa/proto/v1;cortexav1";
+
+// Cortexa Memory Context Manager (MCM) Service
+// Provides hybrid retrieval architecture (RAG, Entity Fact, Structured Memory) for AI agents.
+service MCMService {
+  // AppendMessage appends a new message to a session.
+  // The message will be stored in PostgreSQL and cached in Redis.
+  // Background workers will automatically process it for embeddings and entity extraction.
+  rpc AppendMessage(AppendMessageRequest) returns (AppendMessageResponse);
+
+  // GetContext retrieves contextual information for AI agents.
+  // Performs parallel queries to RAG (vector search), Entity Facts, and Structured Memory.
+  // Returns a comprehensive context bundle optimized for LLM consumption.
+  rpc GetContext(GetContextRequest) returns (GetContextResponse);
+}
+
+// ============== AppendMessage ==============
+
+message AppendMessageRequest {
+  UUID tenant_id = 1;
+  UUID user_id = 2;
+  UUID session_id = 3;
+  Role role = 4;
+  string content = 5;
+}
+
+message AppendMessageResponse {
+  UUID message_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+// ============== GetContext ==============
+
+message GetContextRequest {
+  UUID tenant_id = 1;
+  UUID user_id = 2;
+  UUID session_id = 3;
+  string query = 4;
+}
+
+message GetContextResponse {
+  repeated Message recent_messages = 1;
+  repeated EntityFact entity_facts = 2;
+  repeated RagChunk relevant_chunks = 3;
+  MemoryRecord persona_context = 4;
+  repeated MemoryRecord upcoming_events = 5;
+  int64 latency_ms = 6;
+  bool is_partial = 7;
+}

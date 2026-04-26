@@ -1,0 +1,95 @@
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cortexa_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cortexa
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cortexa"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cortexa_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command: redis-server --save 60 1 --loglevel warning
+    restart: unless-stopped
+
+  # ── Migration (runs once, then exits) ────────────────────────────────────────
+
+  migrate:
+    image: pgvector/pgvector:pg16
+    container_name: cortexa_migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./migrations:/migrations:ro
+    # Idempotent: run each migration only if its sentinel object doesn't exist
+    command: ["/bin/sh", "-c",
+      "psql -h postgres -U postgres -d cortexa -c 'SELECT 1 FROM sessions LIMIT 1' >/dev/null 2>&1 || psql -h postgres -U postgres -d cortexa -f /migrations/001_init.sql &&
+       psql -h postgres -U postgres -d cortexa -c 'SELECT 1 FROM llm_usage LIMIT 1' >/dev/null 2>&1 || psql -h postgres -U postgres -d cortexa -f /migrations/002_llm_usage.sql &&
+       psql -h postgres -U postgres -d cortexa -c \"SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE relrowsecurity AND relforcerowsecurity AND relname='messages'\" | grep -q 1 || psql -h postgres -U postgres -d cortexa -f /migrations/003_rls_force.sql &&
+       echo 'All migrations applied.'"]
+    restart: "no"
+
+  # ── Application services ─────────────────────────────────────────────────────
+
+  server:
+    build: .
+    container_name: cortexa_server
+    command: ["./cortexa-server"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/cortexa?sslmode=disable
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: cortexa_worker
+    command: ["./cortexa-worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/cortexa?sslmode=disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+

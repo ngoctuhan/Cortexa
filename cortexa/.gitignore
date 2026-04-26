@@ -1,0 +1,9 @@
+# Environment files — NEVER commit real credentials
+.env
+.env.*
+!.env.example
+
+# Build artefacts
+cortexa-server
+cortexa-worker
+*.test
