@@ -7,7 +7,6 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?style=flat&logo=postgresql)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![p99 Latency](https://img.shields.io/badge/p99%20Latency-%3C100ms-brightgreen.svg)]()
 
 *Drop-in memory layer for any AI chat system — RAG, entity extraction, and structured memory in one service*
 
@@ -17,7 +16,7 @@
 
 ## Overview
 
-Cortexa is a self-hosted **Memory and Context Manager (MCM)** you can integrate with any AI chat system. Rather than building memory from scratch, you point your chat backend at Cortexa's two REST endpoints and get rich, multi-layered context back in under 100ms.
+Cortexa is a self-hosted **Memory and Context Manager (MCM)** you can integrate with any AI chat system. Rather than building memory from scratch, you point your chat backend at Cortexa's two REST endpoints and get rich, multi-layered context back seamlessly.
 
 It combines three retrieval strategies in a single service:
 
@@ -29,7 +28,7 @@ It combines three retrieval strategies in a single service:
 
 | Feature | Description |
 |---------|-------------|
-| **Sub-100ms p99 Latency** | Parallel queries with a soft timeout ensure fast responses |
+| **High Performance** | Parallel queries with a soft timeout ensure fast responses |
 | **PII Encryption** | AES-GCM encryption with per-tenant derived keys |
 | **Automatic Deduplication** | Smart upsert logic prevents duplicate entity facts |
 | **Tenant Isolation** | Row-Level Security (RLS) enforces strict data separation |
@@ -61,7 +60,7 @@ graph TB
         COG["Cognitive Worker"]
     end
 
-    subgraph Retrieval["Parallel Query Engine  (150 ms soft timeout)"]
+    subgraph Retrieval["Parallel Query Engine"]
         VS["Vector Search"]
         EF["Entity Facts"]
         MR["Structured Memory"]
