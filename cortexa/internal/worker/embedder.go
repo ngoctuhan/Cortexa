@@ -11,6 +11,7 @@ import (
 	"github.com/cortexa/cortexa/internal/llm"
 	"github.com/cortexa/cortexa/internal/model"
 	"github.com/cortexa/cortexa/internal/repository"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -24,16 +25,14 @@ const (
 )
 
 type EmbedderWorker struct {
-	dsn   string
 	redis *redis.Client
 	llm   llm.Client
 	sem   chan struct{} // limits concurrent batch embed calls
 }
 
-func NewEmbedderWorker(dsn string, r *redis.Client, l llm.Client) *EmbedderWorker {
+func NewEmbedderWorker(r *redis.Client, l llm.Client) *EmbedderWorker {
 	cfg := config.Get()
 	return &EmbedderWorker{
-		dsn:   dsn,
 		redis: r,
 		llm:   l,
 		sem:   make(chan struct{}, cfg.CognitiveConcurrency),
@@ -45,84 +44,86 @@ func (w *EmbedderWorker) Listen(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	pool := db.Pool
 
-	conn, err := db.Pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
+	stream := "global:stream:embedder"
+	group := "embedder_group"
+	consumer := fmt.Sprintf("embedder_worker_%d", time.Now().UnixNano())
 
-	_, err = conn.Exec(ctx, "LISTEN new_message")
-	if err != nil {
-		return err
-	}
-
-	// payloadCh buffers incoming notifications so the PG listener loop is never
-	// blocked by slow embed processing.
-	payloadCh := make(chan model.MessagePayload, 256)
-	go w.batchProcessor(ctx, payloadCh, db.Pool)
-
-	for {
-		notification, err := conn.Conn().WaitForNotification(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				close(payloadCh)
-				return nil
-			}
-			time.Sleep(time.Second)
-			continue
-		}
-
-		var payload model.MessagePayload
-		if err := json.Unmarshal([]byte(notification.Payload), &payload); err == nil {
-			select {
-			case payloadCh <- payload:
-			default:
-				// Channel full — log and drop; message embedding will be skipped.
-				log.Printf("Embedder: payload channel full, dropping message %s", payload.MessageID)
-			}
-		}
-	}
-}
-
-// batchProcessor collects payloads from payloadCh and flushes them as a batch
-// either when EmbedBatchMaxSize is reached or EmbedBatchWindow elapses.
-func (w *EmbedderWorker) batchProcessor(ctx context.Context, payloadCh <-chan model.MessagePayload, pool *pgxpool.Pool) {
-	ticker := time.NewTicker(EmbedBatchWindow)
-	defer ticker.Stop()
-
-	var batch []model.MessagePayload
-
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		toProcess := batch
-		batch = nil
-		// Acquire semaphore slot — blocks if CognitiveConcurrency is reached.
-		w.sem <- struct{}{}
-		go func() {
-			defer func() { <-w.sem }()
-			w.processBatch(ctx, toProcess, pool)
-		}()
+	// Create consumer group
+	err = w.redis.XGroupCreateMkStream(ctx, stream, group, "0").Err()
+	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+		log.Printf("Embedder: failed to create consumer group: %v", err)
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			flush()
-			return
-		case p, ok := <-payloadCh:
+			return nil
+		default:
+		}
+
+		// Block for EmbedBatchWindow to fetch up to EmbedBatchMaxSize messages
+		streams, err := w.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    group,
+			Consumer: consumer,
+			Streams:  []string{stream, ">"},
+			Count:    EmbedBatchMaxSize,
+			Block:    EmbedBatchWindow,
+		}).Result()
+
+		if err != nil {
+			if err == redis.Nil {
+				// Timeout, no new messages
+				continue
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Printf("Embedder: XReadGroup error: %v", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if len(streams) == 0 || len(streams[0].Messages) == 0 {
+			continue
+		}
+
+		var payloads []model.MessagePayload
+		var msgIDs []string
+
+		for _, msg := range streams[0].Messages {
+			payloadStr, ok := msg.Values["payload"].(string)
 			if !ok {
-				flush()
-				return
+				if err := w.redis.XAck(ctx, stream, group, msg.ID).Err(); err != nil {
+					log.Printf("Embedder: XAck error for malformed message %s: %v", msg.ID, err)
+				}
+				continue
 			}
-			batch = append(batch, p)
-			if len(batch) >= EmbedBatchMaxSize {
-				flush()
+			var payload model.MessagePayload
+			if err := json.Unmarshal([]byte(payloadStr), &payload); err == nil {
+				payloads = append(payloads, payload)
+				msgIDs = append(msgIDs, msg.ID)
+			} else {
+				if err := w.redis.XAck(ctx, stream, group, msg.ID).Err(); err != nil {
+					log.Printf("Embedder: XAck error for unparseable message %s: %v", msg.ID, err)
+				}
 			}
-		case <-ticker.C:
-			flush()
+		}
+
+		if len(payloads) > 0 {
+			// Acquire semaphore slot
+			w.sem <- struct{}{}
+			go func(p []model.MessagePayload, ids []string) {
+				defer func() { <-w.sem }()
+				w.processBatch(ctx, p, pool)
+				// Ack messages after processing
+				if len(ids) > 0 {
+					if err := w.redis.XAck(ctx, stream, group, ids...).Err(); err != nil {
+						log.Printf("Embedder: XAck error for batch: %v", err)
+					}
+				}
+			}(payloads, msgIDs)
 		}
 	}
 }
@@ -184,13 +185,20 @@ func (w *EmbedderWorker) processTenantBatch(ctx context.Context, tenantID string
 		return
 	}
 
-	// 3. Update DB for each message.
+	// 3. Update DB for each message using pgx.Batch to prevent N+1 queries.
+	batch := &pgx.Batch{}
 	for i, r := range records {
 		embBytes, _ := json.Marshal(embeddings[i])
-		if _, err := pool.Exec(ctx, `UPDATE messages SET embedding = $1 WHERE id::text = $2`, string(embBytes), r.id); err != nil {
-			log.Printf("Embedder: db update error for %s: %v", r.id, err)
+		batch.Queue(`UPDATE messages SET embedding = $1 WHERE id::text = $2`, string(embBytes), r.id)
+	}
+
+	br := pool.SendBatch(ctx, batch)
+	for i := 0; i < len(records); i++ {
+		if _, err := br.Exec(); err != nil {
+			log.Printf("Embedder: db update error for batch item %d: %v", i, err)
 		}
 	}
+	br.Close()
 
 	// 4. Publish to Redis for downstream consumers.
 	for _, p := range payloads {

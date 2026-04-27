@@ -14,6 +14,7 @@ var (
 	allowedAttributes = map[string]bool{
 		"email": true, "phone": true, "job": true, "birthday": true,
 		"address": true, "likes": true, "owns": true, "works_at": true, "relationship": true,
+		"age": true, "name": true,
 	}
 	injectionPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(ignore|forget|disregard).{0,30}(previous|above|instruction)`),

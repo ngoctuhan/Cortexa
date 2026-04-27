@@ -156,6 +156,17 @@ func (s *RESTServer) handleAppendMessages(c *gin.Context) {
 		return
 	}
 
+	// Push to embedder stream
+	mp := model.MessagePayload{
+		MessageID: msg.ID,
+		UserID:    msg.UserID,
+		TenantID:  msg.TenantID,
+		SessionID: msg.SessionID,
+	}
+	if b, err := json.Marshal(mp); err == nil {
+		_ = s.cache.XAddEmbedderTask(ctx, string(b))
+	}
+
 	// Update cache
 	s.cache.AppendMessages(ctx, req.TenantID, req.SessionID, []model.Message{msg})
 

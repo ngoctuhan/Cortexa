@@ -31,10 +31,12 @@ func main() {
 	profileRepo := repository.NewProfileRepository(db)
 	usageRepo := repository.NewLLMUsageRepository(db)
 	expRepo := repository.NewExperienceRepository(db)
+	msgRepo := repository.NewMessageRepository(db)
+	cache := repository.NewCache(rdb, msgRepo)
 
-	embedder := worker.NewEmbedderWorker(cfg.DatabaseURL, rdb, llmClient)
-	cognitiveWorker := worker.NewCognitiveWorker(rdb, llmClient, entityRepo, memRepo, profileRepo, usageRepo)
-	experienceWorker := worker.NewExperienceWorker(rdb, llmClient, entityRepo, expRepo, profileRepo)
+	embedder := worker.NewEmbedderWorker(rdb, llmClient)
+	cognitiveWorker := worker.NewCognitiveWorker(rdb, llmClient, cache, entityRepo, memRepo, profileRepo, usageRepo)
+	experienceWorker := worker.NewExperienceWorker(rdb, llmClient, cache, entityRepo, expRepo, profileRepo)
 
 	decayWorker := worker.NewDecayWorker(
 		memRepo,

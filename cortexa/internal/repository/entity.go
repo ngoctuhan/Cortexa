@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"log"
 
 	"github.com/cortexa/cortexa/internal/config"
 	"github.com/cortexa/cortexa/internal/model"
 	"github.com/cortexa/cortexa/internal/security"
+	"github.com/jackc/pgx/v5"
 )
 
 // EntityRepository handles entity-related database operations.
@@ -21,11 +23,13 @@ func NewEntityRepository(db *DB) *EntityRepository {
 // QueryCurrent retrieves all current (non-expired) entity facts for a user.
 // It decrypts the encrypted values before returning them.
 func (r *EntityRepository) QueryCurrent(ctx context.Context, tenantID, userID, sessionID string) ([]model.EntityFact, error) {
-	// Query current entity facts (valid_until IS NULL)
+	// Query current entity facts (valid_until IS NULL), newest last so callers
+	// can rely on list[-1] being the most recent fact for a given attribute.
 	rows, err := r.db.Pool.Query(ctx, `
 		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
 		FROM entity_mentions
 		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL
+		ORDER BY created_at ASC
 	`, tenantID, userID)
 	if err != nil {
 		return nil, err
@@ -136,60 +140,66 @@ func (r *EntityRepository) GetMessage(ctx context.Context, messageID string) (*m
 	return &m, nil
 }
 
-// UpsertFact inserts or updates an entity fact with deduplication.
-// If an identical fact (same value) exists, it is skipped.
-// If a different value for the same entity/attribute exists, the old one is invalidated and a new one is created.
+// upsertFactCTE is a single atomic statement covering all three cases:
+// 1. Existing fact with same hash → no-op (deduplication)
+// 2. Existing fact with different hash → invalidate old, insert new (supersede)
+// 3. No existing fact → insert new
+// Parameters: $1 tenantID, $2 userID, $3 entityName, $4 attribute, $5 valHash,
+//
+//	$6 sessionID, $7 messageID, $8 entityType, $9 encVal, $10 sourceQuote
+const upsertFactCTE = `
+WITH existing AS (
+	SELECT id, value_hash
+	FROM entity_mentions
+	WHERE tenant_id=$1 AND user_id=$2 AND entity_name=$3 AND attribute=$4 AND valid_until IS NULL
+	LIMIT 1
+	FOR UPDATE
+),
+to_supersede AS (
+	SELECT id FROM existing WHERE value_hash != $5
+),
+invalidated AS (
+	UPDATE entity_mentions SET valid_until = NOW()
+	WHERE id = (SELECT id FROM to_supersede)
+)
+INSERT INTO entity_mentions (
+	tenant_id, user_id, session_id, message_id,
+	entity_name, entity_type, attribute,
+	value_encrypted, value_hash, source_quote, superseded_by
+)
+SELECT $1, $2, $6, $7, $3, $8, $4, $9, $5, $10,
+       (SELECT id FROM to_supersede)
+WHERE NOT EXISTS (SELECT 1 FROM existing WHERE value_hash = $5)
+`
+
+// UpsertFact inserts or updates an entity fact atomically via a single CTE,
+// replacing the previous 3-step Read→Update→Insert Go pattern.
 func (r *EntityRepository) UpsertFact(ctx context.Context, mp model.MessagePayload, f model.ExtractedFact, encVal []byte, valHash string) error {
-	// Check for existing active fact with same entity and attribute
-	var existingID string
-	var existingHash string
-
-	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id, value_hash FROM entity_mentions
-		WHERE tenant_id = $1 AND user_id = $2 AND entity_name = $3 AND attribute = $4 AND valid_until IS NULL
-		LIMIT 1
-	`, mp.TenantID, mp.UserID, f.EntityName, f.Attribute).Scan(&existingID, &existingHash)
-
-	if err == nil {
-		// Existing fact found
-		if existingHash == valHash {
-			// Exact match - skip insertion (deduplication)
-			return nil
-		}
-
-		// Different value - invalidate old and insert new (supersede)
-		tx, err := r.db.Pool.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(ctx)
-
-		// Invalidate old record
-		_, err = tx.Exec(ctx, `
-			UPDATE entity_mentions SET valid_until = NOW() WHERE id = $1
-		`, existingID)
-		if err != nil {
-			return err
-		}
-
-		// Insert new record with reference to superseded record
-		_, err = tx.Exec(ctx, `
-			INSERT INTO entity_mentions (tenant_id, user_id, session_id, message_id, entity_name, entity_type, attribute, value_encrypted, value_hash, source_quote, superseded_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		`, mp.TenantID, mp.UserID, mp.SessionID, mp.MessageID, f.EntityName, f.EntityType, f.Attribute, encVal, valHash, f.SourceQuote, existingID)
-		if err != nil {
-			return err
-		}
-
-		return tx.Commit(ctx)
-	}
-
-	// No existing fact - insert new
-	_, err = r.db.Pool.Exec(ctx, `
-		INSERT INTO entity_mentions (tenant_id, user_id, session_id, message_id, entity_name, entity_type, attribute, value_encrypted, value_hash, source_quote)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, mp.TenantID, mp.UserID, mp.SessionID, mp.MessageID, f.EntityName, f.EntityType, f.Attribute, encVal, valHash, f.SourceQuote)
+	_, err := r.db.Pool.Exec(ctx, upsertFactCTE,
+		mp.TenantID, mp.UserID, f.EntityName, f.Attribute, valHash,
+		mp.SessionID, mp.MessageID, f.EntityType, encVal, f.SourceQuote,
+	)
 	return err
+}
+
+// UpsertFactBatch upserts multiple facts in a single pgx.Batch round-trip,
+// reducing N DB round-trips down to one TCP exchange.
+func (r *EntityRepository) UpsertFactBatch(ctx context.Context, mp model.MessagePayload, facts []model.ExtractedFact, encVals [][]byte, valHashes []string) error {
+	batch := &pgx.Batch{}
+	for i, f := range facts {
+		batch.Queue(upsertFactCTE,
+			mp.TenantID, mp.UserID, f.EntityName, f.Attribute, valHashes[i],
+			mp.SessionID, mp.MessageID, f.EntityType, encVals[i], f.SourceQuote,
+		)
+	}
+	br := r.db.Pool.SendBatch(ctx, batch)
+	defer br.Close() //nolint:errcheck
+	for range facts {
+		if _, err := br.Exec(); err != nil {
+			log.Printf("EntityRepository: upsert fact batch item error: %v", err)
+		}
+	}
+	return nil
 }
 
 // InsertFact inserts a new entity fact without checking for duplicates.

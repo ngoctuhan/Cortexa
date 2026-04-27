@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,11 @@ const (
 	experienceTier1Depth    = 8    // how many recent messages to scan for keywords (Tier 1)
 	experienceSimilarityMin = 0.85 // cosine sim threshold: merge vs insert
 	experienceReadTimeout   = 5 * time.Second
+	// experienceMaxRetries is the maximum number of delivery attempts before a
+	// message is acknowledged (skipped) to prevent it from blocking the stream.
+	experienceMaxRetries = 3
+	// experienceRetryIdleTime mirrors the cognitive worker's idle backoff duration.
+	experienceRetryIdleTime = 60 * time.Second
 )
 
 // tier1Keywords are cheap string signals indicating a learning moment.
@@ -39,11 +45,26 @@ var tier1Keywords = []string{
 	"going forward", "from now on", "in the future", "don't do",
 }
 
+// reJsonBlock matches the outermost JSON object in an LLM response,
+// handling optional markdown code fences.
+var reJsonBlock = regexp.MustCompile(`(?s)\{.*\}`)
+
+// extractJSON returns the first JSON object found in s, stripping any
+// surrounding markdown code fences. Falls back to s itself if none found.
+func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if loc := reJsonBlock.FindStringIndex(s); loc != nil {
+		return s[loc[0]:loc[1]]
+	}
+	return s
+}
+
 // ExperienceWorker subscribes to the same cognitive stream using a separate
 // consumer group and extracts learned behaviors from conversation windows.
 type ExperienceWorker struct {
 	redis       *redis.Client
 	llm         llm.Client
+	cache       *repository.Cache
 	entityRepo  *repository.EntityRepository
 	expRepo     *repository.ExperienceRepository
 	profileRepo *repository.ProfileRepository
@@ -54,6 +75,7 @@ type ExperienceWorker struct {
 func NewExperienceWorker(
 	r *redis.Client,
 	l llm.Client,
+	cache *repository.Cache,
 	entityRepo *repository.EntityRepository,
 	expRepo *repository.ExperienceRepository,
 	profileRepo *repository.ProfileRepository,
@@ -62,6 +84,7 @@ func NewExperienceWorker(
 	return &ExperienceWorker{
 		redis:       r,
 		llm:         l,
+		cache:       cache,
 		entityRepo:  entityRepo,
 		expRepo:     expRepo,
 		profileRepo: profileRepo,
@@ -73,6 +96,10 @@ func NewExperienceWorker(
 // but uses its own consumer group so both workers receive every message.
 func (w *ExperienceWorker) Subscribe(ctx context.Context) {
 	log.Println("ExperienceWorker: starting stream consumer")
+
+	// Start a parallel loop that reclaims idle pending messages for retry.
+	go w.reclaimPending(ctx)
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -124,9 +151,77 @@ func (w *ExperienceWorker) Subscribe(ctx context.Context) {
 					defer func() { <-w.sem }()
 					if err := w.processPayload(ctx, p); err != nil {
 						log.Printf("ExperienceWorker: process error: %v", err)
+						// Do NOT ACK on error — leave in PEL for reclaimPending to retry.
+						return
 					}
-					_ = w.redis.XAck(ctx, s, experienceConsumerGroup, id).Err()
+					if err := w.redis.XAck(ctx, s, experienceConsumerGroup, id).Err(); err != nil {
+						log.Printf("ExperienceWorker: XAck error for %s: %v", id, err)
+					}
 				}(stream, msgID, payload)
+			}
+		}
+	}
+}
+
+// reclaimPending periodically reclaims idle PEL messages for retry.
+// Uses XPendingExt.RetryCount as the authoritative delivery counter.
+// After experienceMaxRetries deliveries the message is ACKed (skipped)
+// to prevent it from blocking the stream indefinitely.
+func (w *ExperienceWorker) reclaimPending(ctx context.Context) {
+	ticker := time.NewTicker(experienceRetryIdleTime / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		streams, err := w.discoverStreams(ctx)
+		if err != nil || len(streams) == 0 {
+			continue
+		}
+		for _, stream := range streams {
+			pending, err := w.redis.XPendingExt(ctx, &redis.XPendingExtArgs{
+				Stream: stream,
+				Group:  experienceConsumerGroup,
+				Idle:   experienceRetryIdleTime,
+				Start:  "-",
+				End:    "+",
+				Count:  10,
+			}).Result()
+			if err != nil {
+				continue
+			}
+			for _, p := range pending {
+				// Exceeded max retries → skip (ACK) to unblock the stream.
+				if p.RetryCount > experienceMaxRetries {
+					log.Printf("ExperienceWorker: skipping message %s after %d deliveries", p.ID, p.RetryCount)
+					_ = w.redis.XAck(ctx, stream, experienceConsumerGroup, p.ID).Err()
+					continue
+				}
+				log.Printf("ExperienceWorker: reclaiming idle message %s (deliveries=%d)", p.ID, p.RetryCount)
+				msgs, err := w.redis.XClaim(ctx, &redis.XClaimArgs{
+					Stream:   stream,
+					Group:    experienceConsumerGroup,
+					Consumer: experienceConsumerName,
+					MinIdle:  experienceRetryIdleTime,
+					Messages: []string{p.ID},
+				}).Result()
+				if err != nil || len(msgs) == 0 {
+					continue
+				}
+				payload, _ := msgs[0].Values["payload"].(string)
+				w.sem <- struct{}{}
+				go func(s, id, pl string) {
+					defer func() { <-w.sem }()
+					if err := w.processPayload(ctx, pl); err != nil {
+						log.Printf("ExperienceWorker: retry error for %s: %v", id, err)
+						return // leave in PEL; next reclaimPending tick will re-evaluate
+					}
+					if err := w.redis.XAck(ctx, s, experienceConsumerGroup, id).Err(); err != nil {
+						log.Printf("ExperienceWorker: XAck error for %s: %v", id, err)
+					}
+				}(stream, p.ID, payload)
 			}
 		}
 	}
@@ -146,11 +241,14 @@ func (w *ExperienceWorker) processPayload(ctx context.Context, payload string) e
 
 	ctx = repository.WithTenantID(ctx, batchInfo.TenantID)
 
-	// Fetch a wider window anchored to the triggering message to prevent
-	// window-drift when batch events are processed after rapid bulk insertions.
-	msgs, err := w.entityRepo.GetRecentMessagesUntil(
-		ctx, batchInfo.TenantID, batchInfo.UserID, batchInfo.SessionID, batchInfo.LastMessageID, experienceWindowSize,
-	)
+	// Try the Redis message cache first, anchored to last_message_id to prevent
+	// window drift when newer messages arrive before the worker processes this event.
+	msgs, err := w.cache.GetRawMessagesUntil(ctx, batchInfo.TenantID, batchInfo.SessionID, batchInfo.LastMessageID, experienceWindowSize)
+	if err != nil || len(msgs) == 0 {
+		msgs, err = w.entityRepo.GetRecentMessagesUntil(
+			ctx, batchInfo.TenantID, batchInfo.UserID, batchInfo.SessionID, batchInfo.LastMessageID, experienceWindowSize,
+		)
+	}
 	if err != nil || len(msgs) == 0 {
 		return nil // nothing to process
 	}
@@ -186,10 +284,7 @@ func (w *ExperienceWorker) processPayload(ctx context.Context, payload string) e
 		return fmt.Errorf("llm generate: %w", err)
 	}
 
-	resp = strings.TrimPrefix(resp, "```json")
-	resp = strings.TrimPrefix(resp, "```")
-	resp = strings.TrimSuffix(resp, "```")
-	resp = strings.TrimSpace(resp)
+	resp = extractJSON(resp)
 
 	var result struct {
 		HasSignal   bool     `json:"has_signal"`
@@ -321,9 +416,12 @@ func (w *ExperienceWorker) discoverStreams(ctx context.Context) ([]string, error
 		}
 		streams = append(streams, keys...)
 		cursor = nextCursor
-		if cursor == 0 {
+		if cursor == 0 || len(streams) >= cognitiveMaxStreamsPerTick {
 			break
 		}
+	}
+	if len(streams) > cognitiveMaxStreamsPerTick {
+		streams = streams[:cognitiveMaxStreamsPerTick]
 	}
 	return streams, nil
 }

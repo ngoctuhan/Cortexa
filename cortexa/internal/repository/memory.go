@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"log"
 
 	"github.com/cortexa/cortexa/internal/model"
+	"github.com/jackc/pgx/v5"
 )
 
 type MemoryRepository struct {
@@ -33,14 +35,31 @@ func (r *MemoryRepository) GetPersona(ctx context.Context, tenantID, userID stri
 	return &m, nil
 }
 
+// UpsertPersona merges new traits into the user's persona record.
+// Uses SELECT FOR UPDATE inside a transaction to prevent a race condition
+// where two concurrent cognitive batches for the same user overwrite each other.
 func (r *MemoryRepository) UpsertPersona(ctx context.Context, tenantID, userID, sessionID string, newTraits []string) error {
-	existing, _ := r.GetPersona(ctx, tenantID, userID)
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var existingID string
+	var existingPayload []byte
+	err = tx.QueryRow(ctx, `
+		SELECT id, payload FROM memory_records
+		WHERE tenant_id = $1 AND user_id = $2 AND type = 'persona'
+		ORDER BY created_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`, tenantID, userID).Scan(&existingID, &existingPayload)
+	found := err == nil
 
 	traitsMap := make(map[string]bool)
 	var currentTraits []string
-
-	if existing != nil && len(existing.Payload) > 0 {
-		_ = json.Unmarshal(existing.Payload, &currentTraits)
+	if found && len(existingPayload) > 0 {
+		_ = json.Unmarshal(existingPayload, &currentTraits)
 		for _, t := range currentTraits {
 			traitsMap[t] = true
 		}
@@ -62,20 +81,20 @@ func (r *MemoryRepository) UpsertPersona(ctx context.Context, tenantID, userID, 
 	payloadBytes, _ := json.Marshal(currentTraits)
 	payloadStr := string(payloadBytes)
 
-	if existing != nil {
-		_, err := r.db.Pool.Exec(ctx, `
-			UPDATE memory_records 
-			SET payload = $1, session_id = $2 
-			WHERE id = $3
-		`, payloadStr, sessionID, existing.ID)
+	if found {
+		_, err = tx.Exec(ctx, `
+			UPDATE memory_records SET payload = $1, session_id = $2 WHERE id = $3
+		`, payloadStr, sessionID, existingID)
+	} else {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
+			VALUES ($1, $2, $3, 'persona', $4, 1.0)
+		`, tenantID, userID, sessionID, payloadStr)
+	}
+	if err != nil {
 		return err
 	}
-
-	_, err := r.db.Pool.Exec(ctx, `
-		INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
-		VALUES ($1, $2, $3, 'persona', $4, 1.0)
-	`, tenantID, userID, sessionID, payloadStr)
-	return err
+	return tx.Commit(ctx)
 }
 
 func (r *MemoryRepository) GetUpcomingEvents(ctx context.Context, tenantID, userID string, limit int) ([]model.MemoryRecord, error) {
@@ -104,25 +123,41 @@ func (r *MemoryRepository) GetUpcomingEvents(ctx context.Context, tenantID, user
 	return events, nil
 }
 
+// UpsertEvent inserts a life_event record, skipping duplicates using a
+// single INSERT WHERE NOT EXISTS statement (replaces the previous SELECT + INSERT).
 func (r *MemoryRepository) UpsertEvent(ctx context.Context, tenantID, userID, sessionID, payload string) error {
-	var existingID string
-	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id FROM memory_records 
-		WHERE tenant_id = $1 AND user_id = $2 AND type = 'life_event' AND payload::text = $3
-		LIMIT 1
-	`, tenantID, userID, payload).Scan(&existingID)
-
-	if err == nil {
-		// Exact match found -> Deduplicate (do nothing)
-		return nil
-	}
-
-	// Insert new event
-	_, err = r.db.Pool.Exec(ctx, `
+	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
-		VALUES ($1, $2, $3, 'life_event', $4, 0.8)
+		SELECT $1, $2, $3, 'life_event', $4, 0.8
+		WHERE NOT EXISTS (
+			SELECT 1 FROM memory_records
+			WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload::text = $4
+		)
 	`, tenantID, userID, sessionID, payload)
 	return err
+}
+
+// UpsertEventBatch upserts multiple life_event records in a single pgx.Batch round-trip.
+func (r *MemoryRepository) UpsertEventBatch(ctx context.Context, tenantID, userID, sessionID string, payloads []string) error {
+	batch := &pgx.Batch{}
+	for _, p := range payloads {
+		batch.Queue(`
+			INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
+			SELECT $1, $2, $3, 'life_event', $4, 0.8
+			WHERE NOT EXISTS (
+				SELECT 1 FROM memory_records
+				WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload::text = $4
+			)
+		`, tenantID, userID, sessionID, p)
+	}
+	br := r.db.Pool.SendBatch(ctx, batch)
+	defer br.Close() //nolint:errcheck
+	for range payloads {
+		if _, err := br.Exec(); err != nil {
+			log.Printf("MemoryRepository: upsert event batch item error: %v", err)
+		}
+	}
+	return nil
 }
 
 func (r *MemoryRepository) InsertEvent(ctx context.Context, tenantID, userID, sessionID string, payload string) error {

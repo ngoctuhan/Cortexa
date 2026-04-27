@@ -77,6 +77,17 @@ func (c *Cache) XAddCognitiveBatch(ctx context.Context, tenantID, payload string
 	}).Err()
 }
 
+// XAddEmbedderTask enqueues a new message for embedding.
+func (c *Cache) XAddEmbedderTask(ctx context.Context, payload string) error {
+	stream := "global:stream:embedder"
+	return c.redis.XAdd(ctx, &redis.XAddArgs{
+		Stream: stream,
+		MaxLen: 100000,
+		Approx: true,
+		Values: map[string]interface{}{"payload": payload, "retries": "0"},
+	}).Err()
+}
+
 func (c *Cache) reloadAndAppend(ctx context.Context, key, tenantID, sessionID string, msgs []model.Message) error {
 	// Warm the cache from DB before appending the new messages so that
 	// subsequent GetRawMessages calls return a complete recent-message window.
@@ -118,4 +129,46 @@ func (c *Cache) GetRawMessages(ctx context.Context, tenantID, sessionID string, 
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
+}
+
+// GetRawMessagesUntil returns up to count messages from the cache anchored at
+// anchorMsgID: the anchor message itself plus older messages, in newest-first
+// order (consistent with GetRawMessages). This prevents window drift when
+// newer messages arrive in the cache between event publish and worker processing.
+//
+// Returns (nil, nil) on cache miss or when anchor is not found — callers should
+// fall back to a DB query in that case.
+func (c *Cache) GetRawMessagesUntil(ctx context.Context, tenantID, sessionID, anchorMsgID string, count int) ([]model.Message, error) {
+	if anchorMsgID == "" {
+		return c.GetRawMessages(ctx, tenantID, sessionID, count)
+	}
+	key := fmt.Sprintf("%s:sess:%s:msgs", tenantID, sessionID)
+	// Fetch the full cached window (up to 50 entries) to locate the anchor.
+	vals, err := c.redis.LRange(ctx, key, 0, 49).Result()
+	if err != nil || len(vals) == 0 {
+		return nil, err
+	}
+	// Decode and find the anchor index (list is newest-first: index 0 = newest).
+	all := make([]model.Message, 0, len(vals))
+	anchorIdx := -1
+	for _, v := range vals {
+		var m model.Message
+		if jsonErr := json.Unmarshal([]byte(v), &m); jsonErr != nil {
+			continue
+		}
+		if m.ID.String() == anchorMsgID {
+			anchorIdx = len(all)
+		}
+		all = append(all, m)
+	}
+	if anchorIdx < 0 {
+		// Anchor not in cache (evicted or not yet written) — signal cache miss.
+		return nil, nil
+	}
+	// Return count messages starting from the anchor towards older entries.
+	end := anchorIdx + count
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[anchorIdx:end], nil
 }

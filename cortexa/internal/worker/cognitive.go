@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,9 +18,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// reJsonBlockCognitive extracts the outermost JSON object from an LLM response,
+// tolerating markdown code fences around it.
+var reJsonBlockCognitive = regexp.MustCompile(`(?s)\{.*\}`)
+
+// errUnrecoverable wraps errors that should be sent straight to DLQ without retry.
+type errUnrecoverable struct{ cause error }
+
+func (e errUnrecoverable) Error() string { return e.cause.Error() }
+func (e errUnrecoverable) Unwrap() error { return e.cause }
+
+// isUnrecoverable returns true for error types where retrying will never help.
+func isUnrecoverable(err error) bool {
+	var u errUnrecoverable
+	return errors.As(err, &u)
+}
+
 type CognitiveWorker struct {
 	redis       *redis.Client
 	llm         llm.Client
+	crypto      *security.Crypto // initialised once; safe for concurrent use
+	cache       *repository.Cache
 	entityRepo  *repository.EntityRepository
 	memRepo     *repository.MemoryRepository
 	profileRepo *repository.ProfileRepository
@@ -29,15 +49,22 @@ type CognitiveWorker struct {
 func NewCognitiveWorker(
 	r *redis.Client,
 	l llm.Client,
+	cache *repository.Cache,
 	entityRepo *repository.EntityRepository,
 	memRepo *repository.MemoryRepository,
 	profileRepo *repository.ProfileRepository,
 	usageRepo *repository.LLMUsageRepository,
 ) *CognitiveWorker {
 	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		log.Fatalf("CognitiveWorker: failed to init crypto (check MASTER_KEY): %v", err)
+	}
 	return &CognitiveWorker{
 		redis:       r,
 		llm:         l,
+		crypto:      crypto,
+		cache:       cache,
 		entityRepo:  entityRepo,
 		memRepo:     memRepo,
 		profileRepo: profileRepo,
@@ -53,6 +80,10 @@ const (
 	cognitiveReadTimeout   = 5 * time.Second
 	cognitiveStreamSuffix  = ":stream:cognitive"
 	cognitiveDLQSuffix     = ":stream:cognitive:dlq"
+	// cognitiveRetryIdleTime is how long a message must sit unacknowledged in the
+	// Pending Entry List before XAUTOCLAIM reclaims it for retry. This gives the
+	// previous attempt time to finish and provides natural backoff without a sleep.
+	cognitiveRetryIdleTime = 60 * time.Second
 )
 
 // Subscribe reads cognitive batch events from every tenant stream via Redis Streams.
@@ -62,6 +93,9 @@ func (w *CognitiveWorker) Subscribe(ctx context.Context) {
 	// We poll all known tenant streams. Tenant streams are discovered by scanning.
 	// Each iteration reads up to 10 messages per stream.
 	log.Println("CognitiveWorker: starting stream consumer")
+
+	// Start a parallel loop that reclaims idle pending messages for retry.
+	go w.reclaimPending(ctx)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -110,22 +144,25 @@ func (w *CognitiveWorker) Subscribe(ctx context.Context) {
 			for _, msg := range result.Messages {
 				msgID := msg.ID
 				payload, _ := msg.Values["payload"].(string)
-				retries := 0
-				if r, ok := msg.Values["retries"].(string); ok {
-					fmt.Sscanf(r, "%d", &retries)
-				}
 
-				go func(s, id, p string, r int) {
+				go func(s, id, p string) {
 					w.sem <- struct{}{}
 					defer func() { <-w.sem }()
-					w.handleStreamMessage(ctx, s, id, p, r)
-				}(stream, msgID, payload, retries)
+					// Pass retries=0: this is the first delivery from the main loop.
+					// Subsequent retries are handled by reclaimPending which uses
+					// XPendingExt.RetryCount as the authoritative delivery counter.
+					w.handleStreamMessage(ctx, s, id, p, 0)
+				}(stream, msgID, payload)
 			}
 		}
 	}
 }
 
 // handleStreamMessage processes one stream message, ACKs on success, retries or DLQs on failure.
+// Unrecoverable errors (bad payload, JSON parse failure) go straight to DLQ without retrying.
+// Transient errors (LLM timeout, DB down) do NOT re-enqueue — the message stays in the
+// PEL and reclaimPending will reclaim it after cognitiveRetryIdleTime has elapsed, providing
+// natural backoff without holding a semaphore slot while waiting.
 func (w *CognitiveWorker) handleStreamMessage(ctx context.Context, stream, msgID, payload string, retries int) {
 	err := w.processBatchPayload(ctx, payload)
 	if err == nil {
@@ -136,9 +173,9 @@ func (w *CognitiveWorker) handleStreamMessage(ctx context.Context, stream, msgID
 		return
 	}
 
-	log.Printf("CognitiveWorker: processBatch error (attempt %d/%d): %v", retries+1, cognitiveMaxRetries, err)
-	if retries+1 >= cognitiveMaxRetries {
-		// Move to DLQ.
+	// Unrecoverable errors (malformed payload, unparseable LLM JSON, missing key)
+	// will never succeed on retry → send directly to DLQ.
+	if isUnrecoverable(err) || retries+1 >= cognitiveMaxRetries {
 		tenantPrefix := strings.SplitN(stream, cognitiveStreamSuffix, 2)[0]
 		dlq := tenantPrefix + cognitiveDLQSuffix
 		_ = w.redis.XAdd(ctx, &redis.XAddArgs{
@@ -151,26 +188,84 @@ func (w *CognitiveWorker) handleStreamMessage(ctx context.Context, stream, msgID
 				"error":   err.Error(),
 			},
 		}).Err()
-		// ACK original to remove from pending list.
 		_ = w.redis.XAck(ctx, stream, cognitiveConsumerGroup, msgID)
-		log.Printf("CognitiveWorker: message %s moved to DLQ after %d retries", msgID, retries+1)
+		log.Printf("CognitiveWorker: message %s moved to DLQ (unrecoverable=%v, attempts=%d)",
+			msgID, isUnrecoverable(err), retries+1)
 		return
 	}
 
-	// Re-enqueue with incremented retry count.
-	_ = w.redis.XAdd(ctx, &redis.XAddArgs{
-		Stream: stream,
-		MaxLen: 10000,
-		Approx: true,
-		Values: map[string]interface{}{
-			"payload": payload,
-			"retries": fmt.Sprintf("%d", retries+1),
-		},
-	}).Err()
-	_ = w.redis.XAck(ctx, stream, cognitiveConsumerGroup, msgID)
+	// Transient error: do NOT ACK and do NOT re-enqueue.
+	// The message stays in the PEL; reclaimPending will pick it up after the
+	// idle timeout expires, giving the system time to recover before retrying.
+	log.Printf("CognitiveWorker: transient error (attempt %d/%d), message %s will be reclaimed after idle: %v",
+		retries+1, cognitiveMaxRetries, msgID, err)
+}
+
+// reclaimPending periodically uses XPendingExt + XClaim to re-deliver messages
+// that have been sitting unacknowledged in the PEL for longer than
+// cognitiveRetryIdleTime. XPendingExt gives the real delivery count (RetryCount)
+// from the PEL, which is used as the authoritative retry counter instead of the
+// "retries" field stored in the message Values (which is immutable after XADD).
+func (w *CognitiveWorker) reclaimPending(ctx context.Context) {
+	ticker := time.NewTicker(cognitiveRetryIdleTime / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		streams, err := w.discoverStreams(ctx)
+		if err != nil || len(streams) == 0 {
+			continue
+		}
+		for _, stream := range streams {
+			// Use XPendingExt to find idle entries and get their true delivery count.
+			pending, err := w.redis.XPendingExt(ctx, &redis.XPendingExtArgs{
+				Stream: stream,
+				Group:  cognitiveConsumerGroup,
+				Idle:   cognitiveRetryIdleTime,
+				Start:  "-",
+				End:    "+",
+				Count:  10,
+			}).Result()
+			if err != nil {
+				continue
+			}
+			for _, p := range pending {
+				// RetryCount is the number of times Redis has delivered this entry.
+				// Subtract 1 to get "previous attempts" (consistent with retries param).
+				retries := int(p.RetryCount) - 1
+				log.Printf("CognitiveWorker: reclaiming idle message %s (deliveries=%d)", p.ID, p.RetryCount)
+
+				// Claim the message to get its payload.
+				msgs, err := w.redis.XClaim(ctx, &redis.XClaimArgs{
+					Stream:   stream,
+					Group:    cognitiveConsumerGroup,
+					Consumer: cognitiveConsumerName,
+					MinIdle:  cognitiveRetryIdleTime,
+					Messages: []string{p.ID},
+				}).Result()
+				if err != nil || len(msgs) == 0 {
+					continue
+				}
+				payload, _ := msgs[0].Values["payload"].(string)
+				w.sem <- struct{}{}
+				go func(s, id, pl string, r int) {
+					defer func() { <-w.sem }()
+					w.handleStreamMessage(ctx, s, id, pl, r)
+				}(stream, p.ID, payload, retries)
+			}
+		}
+	}
 }
 
 // discoverStreams scans Redis for all tenant cognitive streams.
+// cognitiveMaxStreamsPerTick is the maximum number of streams to read in a single
+// XReadGroup call. Capping this prevents XREADGROUP from being overwhelmed when
+// thousands of test/tenant streams accumulate in Redis.
+const cognitiveMaxStreamsPerTick = 100
+
 func (w *CognitiveWorker) discoverStreams(ctx context.Context) ([]string, error) {
 	var streams []string
 	var cursor uint64
@@ -181,9 +276,12 @@ func (w *CognitiveWorker) discoverStreams(ctx context.Context) ([]string, error)
 		}
 		streams = append(streams, keys...)
 		cursor = nextCursor
-		if cursor == 0 {
+		if cursor == 0 || len(streams) >= cognitiveMaxStreamsPerTick {
 			break
 		}
+	}
+	if len(streams) > cognitiveMaxStreamsPerTick {
+		streams = streams[:cognitiveMaxStreamsPerTick]
 	}
 	return streams, nil
 }
@@ -193,12 +291,6 @@ func (w *CognitiveWorker) ensureConsumerGroup(ctx context.Context, stream string
 	err := w.redis.XGroupCreateMkStream(ctx, stream, cognitiveConsumerGroup, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		log.Printf("CognitiveWorker: XGroupCreate error for %s: %v", stream, err)
-	}
-}
-
-func (w *CognitiveWorker) processBatch(ctx context.Context, payload string) {
-	if err := w.processBatchPayload(ctx, payload); err != nil {
-		log.Printf("CognitiveWorker: processBatch error: %v", err)
 	}
 }
 
@@ -212,15 +304,19 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 	}
 	if err := json.Unmarshal([]byte(payload), &batchInfo); err != nil {
 		log.Printf("CognitiveWorker: parse batch payload err: %v\n", err)
-		return err
+		return errUnrecoverable{err} // malformed payload will never parse correctly
 	}
 
 	// Inject tenant into context to activate Row-Level Security.
 	ctx = repository.WithTenantID(ctx, batchInfo.TenantID)
 
-	// Fetch the last N messages anchored to the message that triggered this batch,
-	// preventing window-drift when events are processed after rapid bulk insertions.
-	msgs, err := w.entityRepo.GetRecentMessagesUntil(ctx, batchInfo.TenantID, batchInfo.UserID, batchInfo.SessionID, batchInfo.LastMessageID, batchInfo.BatchSize)
+	// Try the Redis message cache first, anchored to the batch's last_message_id
+	// to avoid window drift when newer messages arrive before the worker processes
+	// this event. Falls back to a DB query on cache miss or anchor not found.
+	msgs, err := w.cache.GetRawMessagesUntil(ctx, batchInfo.TenantID, batchInfo.SessionID, batchInfo.LastMessageID, batchInfo.BatchSize)
+	if err != nil || len(msgs) == 0 {
+		msgs, err = w.entityRepo.GetRecentMessagesUntil(ctx, batchInfo.TenantID, batchInfo.UserID, batchInfo.SessionID, batchInfo.LastMessageID, batchInfo.BatchSize)
+	}
 	if err != nil || len(msgs) == 0 {
 		if err == nil {
 			err = fmt.Errorf("no messages to process")
@@ -274,11 +370,8 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 		log.Printf("CognitiveWorker: record usage error: %v\n", recErr)
 	}
 
-	// Strip markdown blocks if any
-	resp = strings.TrimPrefix(resp, "```json")
-	resp = strings.TrimPrefix(resp, "```")
-	resp = strings.TrimSuffix(resp, "```")
-	resp = strings.TrimSpace(resp)
+	// Extract JSON object, tolerating any surrounding markdown fences.
+	resp = extractCognitiveJSON(resp)
 
 	var respObj struct {
 		Facts          []model.ExtractedFact `json:"facts"`
@@ -287,16 +380,10 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 	}
 	if err := json.Unmarshal([]byte(resp), &respObj); err != nil {
 		log.Printf("CognitiveWorker: json parse error on llm resp: %v\n", err)
-		return err
+		return errUnrecoverable{err} // bad LLM output won't improve on retry
 	}
 
 	// --- 1. Process Facts (with Upsert/Deduplication) ---
-	cfg := config.Get()
-	crypto, err := security.NewCrypto(cfg.MasterKey)
-	if err != nil {
-		log.Printf("CognitiveWorker: failed to init crypto (check MASTER_KEY): %v\n", err)
-		return err
-	}
 	// Pre-filter duplicates from LLM response itself
 	uniqueFacts := make(map[string]model.ExtractedFact)
 	for _, f := range respObj.Facts {
@@ -307,30 +394,42 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 		uniqueFacts[key] = f
 	}
 
+	// Collect and encrypt all valid facts, then send in one pgx.Batch round-trip.
+	batchFacts := make([]model.ExtractedFact, 0, len(uniqueFacts))
+	batchEncVals := make([][]byte, 0, len(uniqueFacts))
+	batchValHashes := make([]string, 0, len(uniqueFacts))
 	for _, f := range uniqueFacts {
-		encVal, _ := crypto.EncryptValue(f.Value, mp.TenantID.String())
-		valHash := security.ValueHash(f.Value)
-
-		err := w.entityRepo.UpsertFact(ctx, mp, f, encVal, valHash)
+		encVal, err := w.crypto.EncryptValue(f.Value, mp.TenantID.String())
 		if err != nil {
-			log.Printf("CognitiveWorker: db upsert fact error: %v\n", err)
+			log.Printf("CognitiveWorker: encrypt error for fact %s: %v\n", f.EntityName, err)
+			continue
+		}
+		batchFacts = append(batchFacts, f)
+		batchEncVals = append(batchEncVals, encVal)
+		batchValHashes = append(batchValHashes, security.ValueHash(f.Value))
+	}
+	if len(batchFacts) > 0 {
+		if err := w.entityRepo.UpsertFactBatch(ctx, mp, batchFacts, batchEncVals, batchValHashes); err != nil {
+			log.Printf("CognitiveWorker: db upsert facts batch error: %v\n", err)
 		} else {
-			log.Printf("CognitiveWorker: Extracted/Upserted fact %s - %s\n", f.EntityName, f.Attribute)
+			log.Printf("CognitiveWorker: upserted %d facts\n", len(batchFacts))
 		}
 	}
 
 	// --- 2. Process Events (with Upsert/Deduplication) ---
+	var eventPayloads []string
 	for _, ev := range respObj.Events {
 		if ev["event_name"] == "" {
 			continue
 		}
-
 		payloadBytes, _ := json.Marshal(ev)
-		err := w.memRepo.UpsertEvent(ctx, mp.TenantID.String(), mp.UserID.String(), mp.SessionID.String(), string(payloadBytes))
-		if err != nil {
-			log.Printf("CognitiveWorker: db upsert event error: %v\n", err)
+		eventPayloads = append(eventPayloads, string(payloadBytes))
+	}
+	if len(eventPayloads) > 0 {
+		if err := w.memRepo.UpsertEventBatch(ctx, mp.TenantID.String(), mp.UserID.String(), mp.SessionID.String(), eventPayloads); err != nil {
+			log.Printf("CognitiveWorker: db upsert events batch error: %v\n", err)
 		} else {
-			log.Printf("CognitiveWorker: Extracted/Upserted event '%s'\n", ev["event_name"])
+			log.Printf("CognitiveWorker: upserted %d events\n", len(eventPayloads))
 		}
 	}
 
@@ -344,6 +443,16 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 		}
 	}
 	return nil
+}
+
+// extractCognitiveJSON returns the first JSON object found in s, stripping
+// any surrounding markdown code fences.
+func extractCognitiveJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if loc := reJsonBlockCognitive.FindStringIndex(s); loc != nil {
+		return s[loc[0]:loc[1]]
+	}
+	return s
 }
 
 func (w *CognitiveWorker) buildBatchPrompt(ctx context.Context, tenantID, userID, transcript string) (string, error) {
