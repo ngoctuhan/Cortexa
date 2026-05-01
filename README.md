@@ -44,11 +44,7 @@ It combines three retrieval strategies in a single service:
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.png)
-
-
-
----
+<!-- Replace with architecture diagram image -->
 
 ### Data Flow
 

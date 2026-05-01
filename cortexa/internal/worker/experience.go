@@ -149,8 +149,10 @@ func (w *ExperienceWorker) Subscribe(ctx context.Context) {
 				go func(s, id, p string) {
 					w.sem <- struct{}{}
 					defer func() { <-w.sem }()
+					tenantPart := strings.SplitN(s, cognitiveStreamSuffix, 2)[0]
+					log.Printf("ExperienceWorker [stream=%s] recv msg=%s", shortID(tenantPart), id)
 					if err := w.processPayload(ctx, p); err != nil {
-						log.Printf("ExperienceWorker: process error: %v", err)
+						log.Printf("ExperienceWorker [stream=%s] process error msg=%s: %v", shortID(tenantPart), id, err)
 						// Do NOT ACK on error — leave in PEL for reclaimPending to retry.
 						return
 					}
@@ -238,6 +240,7 @@ func (w *ExperienceWorker) processPayload(ctx context.Context, payload string) e
 	if err := json.Unmarshal([]byte(payload), &batchInfo); err != nil {
 		return fmt.Errorf("parse payload: %w", err)
 	}
+	tag := fmt.Sprintf("[t:%s u:%s s:%s]", shortID(batchInfo.TenantID), shortID(batchInfo.UserID), shortID(batchInfo.SessionID))
 
 	ctx = repository.WithTenantID(ctx, batchInfo.TenantID)
 
@@ -335,9 +338,9 @@ func (w *ExperienceWorker) processPayload(ctx context.Context, payload string) e
 	}
 
 	if similarID != nil {
-		log.Printf("ExperienceWorker: merged experience (id=%s) for user %s", similarID, batchInfo.UserID)
+		log.Printf("ExperienceWorker %s merged (id=%s)", tag, similarID)
 	} else {
-		log.Printf("ExperienceWorker: new experience created for user %s: %q", batchInfo.UserID, result.Description)
+		log.Printf("ExperienceWorker %s new: %q", tag, result.Description)
 	}
 	return nil
 }

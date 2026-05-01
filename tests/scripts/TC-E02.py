@@ -28,7 +28,7 @@ def run_test():
     print("Waiting for initial entity extraction (up to 120s)...")
 
     def has_any_email():
-        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "Email của Đức là gì?")
+        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "Email của Đức là gì?", memory_types=["entity_facts"])
         if not ok:
             return False
         facts = r.get("entity_facts", [])
@@ -48,7 +48,7 @@ def run_test():
     print("Waiting for upsert extraction (up to 120s)...")
 
     def has_new_email():
-        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "Email của Đức là gì?")
+        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "Email của Đức là gì?", memory_types=["entity_facts"])
         if not ok:
             return False
         facts = r.get("entity_facts", [])

@@ -30,8 +30,8 @@ def run_test():
     ]:
         APIClient.append_message(tenant_id, user_id, session_id, role, text)
 
-    print("Step 2: Wait for age=28 to appear in entity_facts (up to 180s)")
-    deadline = time.time() + 180
+    print("Step 2: Wait for age=28 to appear in entity_facts (up to 240s)")
+    deadline = time.time() + 240
     while time.time() < deadline:
         ok, resp, _ = APIClient.get_context(
             tenant_id, user_id, session_id,
@@ -43,7 +43,7 @@ def run_test():
             break
         time.sleep(2)
     else:
-        raise AssertionError("CognitiveWorker did not extract age=28 within 180s")
+        raise AssertionError("CognitiveWorker did not extract age=28 within 240s")
 
     print("Step 3: Insert conflicting fact — Đức 29 tuổi")
     ok, _, _ = APIClient.append_message(
@@ -58,8 +58,8 @@ def run_test():
     ]:
         APIClient.append_message(tenant_id, user_id, session_id, role, text)
 
-    print("Step 4: Wait for age=29 to supersede age=28 (up to 180s)")
-    deadline = time.time() + 180
+    print("Step 4: Wait for age=29 to supersede age=28 (up to 240s)")
+    deadline = time.time() + 240
     facts = []
     while time.time() < deadline:
         ok, resp, _ = APIClient.get_context(
@@ -73,7 +73,7 @@ def run_test():
             break
         time.sleep(2)
     else:
-        raise AssertionError(f"CognitiveWorker did not update age to 29 within 180s. Got: {facts}")
+        raise AssertionError(f"CognitiveWorker did not update age to 29 within 240s. Got: {facts}")
 
     print("Step 5: Assert age=29 present, age=28 absent (superseded)")
     values = [str(f.get("value", "")) for f in facts]

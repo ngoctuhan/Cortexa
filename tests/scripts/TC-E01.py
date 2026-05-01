@@ -28,7 +28,7 @@ def run_test():
     print("Waiting for entity extraction (up to 120s)...")
 
     def has_duc_email():
-        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "email của Đức là gì?")
+        ok, r, _ = APIClient.get_context(tenant_id, user_id, session_id, "email của Đức là gì?", memory_types=["entity_facts"])
         if not ok:
             return False
         for fact in r.get("entity_facts", []):

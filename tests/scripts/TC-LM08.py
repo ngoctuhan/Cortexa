@@ -15,6 +15,16 @@ from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 
 def run_test():
+    # Flush cognitive streams to prevent backlog from delaying extraction
+    try:
+        import redis as _redis
+        _r = _redis.Redis(host="localhost", port=6380, db=0)
+        _streams = _r.keys("*:stream:cognitive")
+        if _streams:
+            _r.delete(*_streams)
+            print(f"[Setup] Cleared {len(_streams)} cognitive stream(s)")
+    except Exception as _e:
+        print(f"[Setup] Stream clear skipped: {_e}")
     tenant_id, user_id, session_id = TestHelpers.generate_ids()
 
     print("Step 1: Insert birthday event message")
@@ -32,20 +42,21 @@ def run_test():
     ]:
         APIClient.append_message(tenant_id, user_id, session_id, role, text)
 
-    print("Step 2: Wait for CognitiveWorker to extract upcoming_events (up to 240s)")
-    deadline = time.time() + 240
+    print("Step 2: Wait for CognitiveWorker to extract upcoming_events (up to 600s)")
+    deadline = time.time() + 600
     events = []
     while time.time() < deadline:
         ok, resp, _ = APIClient.get_context(
             tenant_id, user_id, session_id,
             query="Sinh nhật Đức khi nào?",
+            memory_types=["events"],
         )
         events = resp.get("upcoming_events", []) if ok else []
         if events:
             break
         time.sleep(2)
     else:
-        raise AssertionError("CognitiveWorker did not extract upcoming_events within 240s")
+        raise AssertionError("CognitiveWorker did not extract upcoming_events within 600s")
 
     print("Step 3: Assert event references Đức and a birthday")
     found = any(

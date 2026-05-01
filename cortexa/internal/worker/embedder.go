@@ -153,7 +153,7 @@ func (w *EmbedderWorker) processTenantBatch(ctx context.Context, tenantID string
 	}
 	rows, err := pool.Query(ctx, `SELECT id::text, content FROM messages WHERE id::text = ANY($1::text[])`, ids)
 	if err != nil {
-		log.Printf("Embedder: batch query error (tenant %s): %v", tenantID, err)
+		log.Printf("Embedder [t:%s] batch query error: %v", shortID(tenantID), err)
 		return
 	}
 	type msgRecord struct{ id, content string }
@@ -177,11 +177,11 @@ func (w *EmbedderWorker) processTenantBatch(ctx context.Context, tenantID string
 	}
 	embeddings, err := w.llm.EmbedBatch(ctx, texts)
 	if err != nil {
-		log.Printf("Embedder: batch embed error (tenant %s): %v", tenantID, err)
+		log.Printf("Embedder [t:%s] embed error: %v", shortID(tenantID), err)
 		return
 	}
 	if len(embeddings) != len(records) {
-		log.Printf("Embedder: embedding count mismatch: got %d, expected %d", len(embeddings), len(records))
+		log.Printf("Embedder [t:%s] embedding count mismatch: got %d expected %d", shortID(tenantID), len(embeddings), len(records))
 		return
 	}
 
@@ -205,5 +205,5 @@ func (w *EmbedderWorker) processTenantBatch(ctx context.Context, tenantID string
 		payloadBytes, _ := json.Marshal(p)
 		w.redis.Publish(ctx, fmt.Sprintf("%s:events:messages", p.TenantID), payloadBytes)
 	}
-	log.Printf("Embedder: batch processed %d/%d messages for tenant %s", len(records), len(payloads), tenantID)
+	log.Printf("Embedder [t:%s] processed %d/%d messages", shortID(tenantID), len(records), len(payloads))
 }

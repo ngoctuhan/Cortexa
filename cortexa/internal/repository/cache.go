@@ -47,9 +47,14 @@ func (c *Cache) AppendMessages(ctx context.Context, tenantID, sessionID string, 
 
 func (c *Cache) IncrementCognitiveBatch(ctx context.Context, tenantID, sessionID string) (int64, error) {
 	key := fmt.Sprintf("%s:sess:%s:cog_batch", tenantID, sessionID)
+	activeKey := "global:active_sessions"
+	member := fmt.Sprintf("%s:%s", tenantID, sessionID)
+
 	pipe := c.redis.Pipeline()
 	incr := pipe.Incr(ctx, key)
 	pipe.Expire(ctx, key, 24*time.Hour)
+	// Track activity for timeout flush
+	pipe.ZAdd(ctx, activeKey, redis.Z{Score: float64(time.Now().Unix()), Member: member})
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return 0, err
@@ -57,9 +62,49 @@ func (c *Cache) IncrementCognitiveBatch(ctx context.Context, tenantID, sessionID
 	return incr.Val(), nil
 }
 
+// GetCognitiveBatchCount returns the current number of pending messages for a session.
+func (c *Cache) GetCognitiveBatchCount(ctx context.Context, tenantID, sessionID string) (int64, error) {
+	key := fmt.Sprintf("%s:sess:%s:cog_batch", tenantID, sessionID)
+	val, err := c.redis.Get(ctx, key).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return val, err
+}
+
 func (c *Cache) ResetCognitiveBatch(ctx context.Context, tenantID, sessionID string) error {
 	key := fmt.Sprintf("%s:sess:%s:cog_batch", tenantID, sessionID)
-	return c.redis.Del(ctx, key).Err()
+	activeKey := "global:active_sessions"
+	member := fmt.Sprintf("%s:%s", tenantID, sessionID)
+
+	pipe := c.redis.Pipeline()
+	pipe.Del(ctx, key)
+	pipe.ZRem(ctx, activeKey, member)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// GetInactiveSessions returns sessions that haven't had activity in the specified duration.
+func (c *Cache) GetInactiveSessions(ctx context.Context, olderThan time.Duration, limit int64) ([]string, error) {
+	key := "global:active_sessions"
+	maxScore := fmt.Sprintf("%f", float64(time.Now().Add(-olderThan).Unix()))
+	return c.redis.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+		Min:    "-inf",
+		Max:    maxScore,
+		Offset: 0,
+		Count:  limit,
+	}).Result()
+}
+
+func (c *Cache) RemoveSessionActivity(ctx context.Context, tenantID, sessionID string) error {
+	key := "global:active_sessions"
+	member := fmt.Sprintf("%s:%s", tenantID, sessionID)
+	return c.redis.ZRem(ctx, key, member).Err()
+}
+
+// TryLock attempts to acquire a distributed lock. Returns true if acquired.
+func (c *Cache) TryLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	return c.redis.SetNX(ctx, key, "locked", ttl).Result()
 }
 
 func (c *Cache) PublishEvent(ctx context.Context, channel, payload string) error {

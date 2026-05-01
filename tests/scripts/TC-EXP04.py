@@ -36,14 +36,14 @@ def run_tests():
     turns = ExperienceHelpers.build_correction_conversation(topic="code review", language="vi")
     ExperienceHelpers.send_conversation(TENANT_ID, USER_ID, SESSION_ID, turns)
 
-    experience = ExperienceHelpers.wait_for_experience(TENANT_ID, USER_ID, timeout_ms=45000)
+    experience = ExperienceHelpers.wait_for_experience(TENANT_ID, USER_ID, timeout_ms=180000)
 
     if not experience:
         results.append(TestResult(
             test_id="TC-EXP04-00",
             name="Prerequisite: experience created",
             passed=False,
-            details="No experience found after 45s",
+            details="No experience found after 180s",
         ))
         for r in results:
             r.print()

@@ -37,6 +37,7 @@ func main() {
 	embedder := worker.NewEmbedderWorker(rdb, llmClient)
 	cognitiveWorker := worker.NewCognitiveWorker(rdb, llmClient, cache, entityRepo, memRepo, profileRepo, usageRepo)
 	experienceWorker := worker.NewExperienceWorker(rdb, llmClient, cache, entityRepo, expRepo, profileRepo)
+	flusherWorker := worker.NewFlusherWorker(cache, msgRepo)
 
 	decayWorker := worker.NewDecayWorker(
 		memRepo,
@@ -59,6 +60,11 @@ func main() {
 	go func() {
 		log.Println("Starting Experience Worker (Behavior Learner)...")
 		experienceWorker.Subscribe(context.Background())
+	}()
+
+	go func() {
+		log.Println("Starting Flusher Worker (Timeout Session Scanner)...")
+		flusherWorker.Start(1*time.Minute, 30*time.Minute)
 	}()
 
 	log.Println("Starting Embedder Worker...")

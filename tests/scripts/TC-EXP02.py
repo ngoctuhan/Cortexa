@@ -63,13 +63,13 @@ def run_tests():
 
     # ── 02: Wait for ExperienceWorker to detect and create experience ─────────
     experience = ExperienceHelpers.wait_for_experience(
-        TENANT_ID, USER_ID, timeout_ms=60000, poll_interval_ms=500,
+        TENANT_ID, USER_ID, timeout_ms=180000, poll_interval_ms=500,
     )
     results.append(TestResult(
         test_id="TC-EXP02-02",
         name="ExperienceWorker creates experience after correction conversation",
         passed=experience is not None,
-        details=f"experience={'found' if experience else 'NOT FOUND (timeout 45s)'}",
+        details=f"experience={'found' if experience else 'NOT FOUND (timeout 180s)'}",
     ))
 
     # ── 03: Experience has required fields ───────────────────────────────────

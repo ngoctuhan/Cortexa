@@ -386,7 +386,7 @@ func (s *RESTServer) handleCreateSession(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	ctx := withTenant(c, tenantID.String())
 	session := model.Session{
 		ID:       uuid.New(),
 		TenantID: tenantID,
@@ -399,7 +399,60 @@ func (s *RESTServer) handleCreateSession(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 		return
 	}
+
+	// Async: Trigger Hybrid Flush for previous active sessions of this user.
+	// Use a detached context with the tenant ID so RLS is enforced in the goroutine.
+	flushCtx := repository.WithTenantID(context.Background(), tenantID.String())
+	go s.flushPreviousUserSessions(flushCtx, req.TenantID, req.UserID, session.ID.String())
+
 	c.JSON(http.StatusCreated, session)
+}
+
+// flushPreviousUserSessions checks recent sessions of a user and forces a cognitive batch flush
+// if they have pending un-extracted messages.
+func (s *RESTServer) flushPreviousUserSessions(ctx context.Context, tenantID, userID, excludeSessionID string) {
+	// 1. Get recent sessions for the user (limit 5 to avoid overloading)
+	sessions, err := s.sessionRepo.List(ctx, tenantID, userID, 5, 0)
+	if err != nil {
+		log.Printf("flushPreviousUserSessions: failed to list sessions: %v", err)
+		return
+	}
+
+	for _, sess := range sessions {
+		sessID := sess.ID.String()
+		if sessID == excludeSessionID {
+			continue
+		}
+
+		// 2. Check if this session has pending messages in the cache
+		count, err := s.cache.GetCognitiveBatchCount(ctx, tenantID, sessID)
+		if err != nil || count == 0 {
+			continue
+		}
+
+		// 3. Get the latest message ID for this session to use as anchor
+		msgs, err := s.msgRepo.GetSessionHistory(ctx, tenantID, sessID, 1, "")
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+
+		lastMsgID := msgs[0].ID.String()
+
+		// 4. Reset the counter and publish to the stream
+		s.cache.ResetCognitiveBatch(ctx, tenantID, sessID)
+
+		batchPayload := map[string]interface{}{
+			"tenant_id":       tenantID,
+			"user_id":         userID,
+			"session_id":      sessID,
+			"batch_size":      int(count),
+			"last_message_id": lastMsgID,
+		}
+		if b, err := json.Marshal(batchPayload); err == nil {
+			_ = s.cache.XAddCognitiveBatch(ctx, tenantID, string(b))
+			log.Printf("flushPreviousUserSessions: triggered force flush for session %s (count=%d)", sessID, count)
+		}
+	}
 }
 
 // handleListSessions handles GET /v1/sessions.
@@ -429,7 +482,7 @@ func (s *RESTServer) handleListSessions(c *gin.Context) {
 		}
 	}
 
-	ctx := c.Request.Context()
+	ctx := withTenant(c, tenantID)
 	sessions, err := s.sessionRepo.List(ctx, tenantID, userID, limit, offset)
 	if err != nil {
 		log.Printf("handleListSessions error: %v", err)
@@ -456,7 +509,7 @@ func (s *RESTServer) handleDeleteSession(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	ctx := withTenant(c, tenantID)
 	deleted, err := s.sessionRepo.Delete(ctx, tenantID, sessionID)
 	if err != nil {
 		log.Printf("handleDeleteSession error: %v", err)

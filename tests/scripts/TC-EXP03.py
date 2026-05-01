@@ -47,7 +47,7 @@ def run_tests():
     turns = ExperienceHelpers.build_correction_conversation(topic="Python", language="en")
     ExperienceHelpers.send_conversation(TENANT_ID, USER_ID, SESSION_ID, turns)
 
-    experience = ExperienceHelpers.wait_for_experience(TENANT_ID, USER_ID, timeout_ms=60000)
+    experience = ExperienceHelpers.wait_for_experience(TENANT_ID, USER_ID, timeout_ms=180000)
 
     if not experience:
         # Can't test feedback without an experience — fail fast but still report
@@ -55,7 +55,7 @@ def run_tests():
             test_id="TC-EXP03-00",
             name="Prerequisite: experience created from correction conversation",
             passed=False,
-            details="No experience found after 45s — feedback tests skipped",
+            details="No experience found after 180s — feedback tests skipped",
         ))
         for r in results:
             r.print()

@@ -1,11 +1,11 @@
 """
 Test Case: TC-V02
-Name: Rerank Top 100 → Top 5
+Name: Rerank Top 200 → Top 15
 Category: Validation / Input
 Input/Setup: 100 messages (50 user + 50 ai turns) embedded; vector DB fetches up to
-             DefaultVectorTopK=100 candidates; reranker applies cosine_sim × decay ×
-             importance and caps output at DefaultRerankTopK=5.
-Expected Result: semantic_messages length is 1–5; results sorted by score descending.
+             DefaultVectorTopK=200 candidates; reranker applies cosine_sim × decay ×
+             importance and caps output at DefaultRerankTopK=15.
+Expected Result: semantic_messages length is 1–15; results sorted by score descending.
 """
 
 import os
@@ -80,7 +80,7 @@ TURNS = [
     ("user",      "What is TypeScript?"),
     ("assistant", "TypeScript adds static types to JavaScript for better tooling and safety."),
     ("user",      "What is Swift?"),
-    ("assistant", "Swift is Apple language for iOS and macOS application development."),
+    ("assistant", "Swift is Apple's language for iOS and macOS application development."),
     ("user",      "What is Kotlin?"),
     ("assistant", "Kotlin is the preferred language for modern Android development."),
     ("user",      "What is machine learning?"),
@@ -154,9 +154,9 @@ def run_test():
     Assertions.assert_http_code(True, context="GetContext failed")
     Assertions.assert_field_exists(resp, "semantic_messages", context="GetContext response")
 
-    # DefaultRerankTopK=5: reranker must cap results at 5
-    assert 1 <= len(chunks) <= 5, (
-        f"Expected 1–5 chunks after rerank (DefaultRerankTopK=5), got {len(chunks)}"
+    # DefaultRerankTopK=15: reranker must cap results at 15
+    assert 1 <= len(chunks) <= 15, (
+        f"Expected 1–15 chunks after rerank (DefaultRerankTopK=15), got {len(chunks)}"
     )
 
     # Results must be sorted by composite score descending
@@ -165,10 +165,10 @@ def run_test():
         f"Chunks not sorted by score descending: {scores}"
     )
 
-    print(f"PASS: {len(chunks)} chunk(s) returned (≤5), sorted by score descending")
+    print(f"PASS: {len(chunks)} chunk(s) returned (≤15), sorted by score descending")
     for i, c in enumerate(chunks):
         print(f"  [{i+1}] score={c['score']:.4f} cosine={c.get('cosine_sim', 0):.4f} content={c['content'][:60]!r}")
 
 
 if __name__ == "__main__":
-    run_test_wrapper("TC-V02", "Rerank Top 100 → Top 5", run_test)
+    run_test_wrapper("TC-V02", "Rerank Top 200 → Top 15", run_test)

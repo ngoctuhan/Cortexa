@@ -128,10 +128,10 @@ func (r *MemoryRepository) GetUpcomingEvents(ctx context.Context, tenantID, user
 func (r *MemoryRepository) UpsertEvent(ctx context.Context, tenantID, userID, sessionID, payload string) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
-		SELECT $1, $2, $3, 'life_event', $4, 0.8
+		SELECT $1, $2, $3, 'life_event', $4::jsonb, 0.8
 		WHERE NOT EXISTS (
 			SELECT 1 FROM memory_records
-			WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload::text = $4
+			WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload = $4::jsonb
 		)
 	`, tenantID, userID, sessionID, payload)
 	return err
@@ -143,10 +143,10 @@ func (r *MemoryRepository) UpsertEventBatch(ctx context.Context, tenantID, userI
 	for _, p := range payloads {
 		batch.Queue(`
 			INSERT INTO memory_records (tenant_id, user_id, session_id, type, payload, importance)
-			SELECT $1, $2, $3, 'life_event', $4, 0.8
+			SELECT $1, $2, $3, 'life_event', $4::jsonb, 0.8
 			WHERE NOT EXISTS (
 				SELECT 1 FROM memory_records
-				WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload::text = $4
+				WHERE tenant_id=$1 AND user_id=$2 AND type='life_event' AND payload = $4::jsonb
 			)
 		`, tenantID, userID, sessionID, p)
 	}

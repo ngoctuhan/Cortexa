@@ -14,15 +14,15 @@ import (
 
 const (
 	// Configuration constants for context retrieval
-	CacheRecentMessagesCount = 20                     // Number of recent messages to fetch from cache
-	QueryTimeout             = 150 * time.Millisecond // Soft timeout for parallel DB queries
-	EmbedTimeout             = 800 * time.Millisecond // Timeout for LLM embedding call (network round-trip)
-	DefaultVectorTopK        = 100                    // Number of vector results to fetch
-	DefaultRerankTopK        = 5                      // Number of results to return after reranking
-	DefaultEventsLimit       = 3                      // Number of upcoming events to fetch
-	TimeDecayRate            = 0.05                   // Decay rate for time-based scoring
-	DefaultExperienceTopK    = 3                      // Max experiences to inject into context
-	DefaultExperienceMinConf = 0.4                    // Minimum confidence threshold for retrieval
+	CacheRecentMessagesCount = 20              // Number of recent messages to fetch from cache
+	QueryTimeout             = 2 * time.Second // Soft timeout for parallel DB queries (incl. HNSW vector search)
+	EmbedTimeout             = 5 * time.Second // Timeout for LLM embedding call (network round-trip)
+	DefaultVectorTopK        = 200             // Number of vector results to fetch
+	DefaultRerankTopK        = 15              // Number of results to return after reranking
+	DefaultEventsLimit       = 5               // Number of upcoming events to fetch
+	TimeDecayRate            = 0.05            // Decay rate for time-based scoring
+	DefaultExperienceTopK    = 3               // Max experiences to inject into context
+	DefaultExperienceMinConf = 0.4             // Minimum confidence threshold for retrieval
 )
 
 // TimeRange defines an optional start and end time for filtering memory retrieval.
@@ -169,7 +169,12 @@ func (r *ContextRetriever) fetchContextParallel(ctx context.Context, req GetCont
 				return
 			}
 
-			chunks, err := r.vectorRepo.SearchHybrid(softCtx, repository.VectorQuery{
+			// Create a fresh DB context after embed returns — softCtx may already be
+			// expired if the embed call took longer than QueryTimeout.
+			dbCtx, dbCancel := context.WithTimeout(ctx, QueryTimeout)
+			defer dbCancel()
+
+			chunks, err := r.vectorRepo.SearchHybrid(dbCtx, repository.VectorQuery{
 				TenantID:  req.TenantID,
 				UserID:    req.UserID,
 				QueryText: req.Query,
@@ -212,8 +217,11 @@ func (r *ContextRetriever) fetchContextParallel(ctx context.Context, req GetCont
 				ch <- fetchResult{"experiences", []model.Experience{}, err}
 				return
 			}
+			// Fresh DB context for the same reason as the semantic goroutine.
+			expDbCtx, expDbCancel := context.WithTimeout(ctx, QueryTimeout)
+			defer expDbCancel()
 			exps, err := r.expRepo.SearchByVector(
-				softCtx, req.TenantID, req.UserID,
+				expDbCtx, req.TenantID, req.UserID,
 				emb, DefaultExperienceTopK, DefaultExperienceMinConf,
 			)
 			// Fire-and-forget usage tracking for retrieved experiences.
@@ -234,10 +242,13 @@ func (r *ContextRetriever) fetchContextParallel(ctx context.Context, req GetCont
 	}
 
 	// The outer wait uses EmbedTimeout so the semantic goroutine (which embeds
-	// the query before searching) has enough time to complete. DB-only goroutines
+	// Allow enough time for the full embed + DB query pipeline. DB-only goroutines
 	// still respect their inner softCtx (QueryTimeout).
 	// experiences task also embeds, so we double the timeout when it is active.
-	outerTimeout := EmbedTimeout
+	outerTimeout := EmbedTimeout + QueryTimeout
+	if wantsType("experiences") {
+		outerTimeout *= 2
+	}
 	outerCtx, outerCancel := context.WithTimeout(ctx, outerTimeout)
 	defer outerCancel()
 
