@@ -6,10 +6,11 @@ Input/Setup: Session with 10 messages in Redis; call GetSessionHistory(limit=5)
 Expected Result: Return 5 most-recent messages from Redis (no DB query); latency < 5ms
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

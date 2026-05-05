@@ -6,10 +6,11 @@ Input/Setup: GetContext on brand-new session with no messages
 Expected Result: Empty RecentMessages; no panic; bundle returned with other fields
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

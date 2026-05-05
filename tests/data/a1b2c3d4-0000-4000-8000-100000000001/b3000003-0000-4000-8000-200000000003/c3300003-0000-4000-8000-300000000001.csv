@@ -1,0 +1,26 @@
+"role","content"
+"user","Chào! Tôi tên là Hùng, 35 tuổi. Tôi điều hành chuỗi nhà hàng phở 'Phở Bắc' với 3 cơ sở tại Hà Nội."
+"assistant","Chào anh Hùng! 3 cơ sở ở Hà Nội — anh đang mở rộng hay optimize hiện tại?"
+"user","Ba cơ sở: Hoàn Kiếm (flagship, mở 2018), Cầu Giấy (2021), Hoàng Mai (2023). Tổng doanh thu tháng trước 380 triệu đồng."
+"assistant","380 triệu/tháng — trung bình 127 triệu/cơ sở. Cơ sở nào perform tốt nhất?"
+"user","Hoàn Kiếm 180 triệu — nhiều khách du lịch nước ngoài. Cầu Giấy 130 triệu — dân văn phòng. Hoàng Mai mới nhất chỉ 70 triệu."
+"assistant","Hoàng Mai 70 triệu sau 1.5 năm hơi chậm. Cạnh tranh ở đó thế nào?"
+"user","Nhiều quán phở local giá rẻ. Tôi đang dùng Facebook, GrabFood, ShopeeFood. Google Ads chưa làm. Có thuê 1 bạn part-time lo social media nhưng không ổn định."
+"assistant","Anh đang bỏ sót kênh quan trọng — người tìm 'phở Hà Nội' đều search Google. Anh có Google My Business listing chưa?"
+"user","Có nhưng ít review lắm — 15-20 review mỗi cơ sở. Tôi biết quan trọng nhưng không biết cách tăng."
+"assistant","Chiến lược tăng Google Reviews:
+1. QR code dẫn đến trang review tại bàn và trên bill
+2. Nhân viên nhắc nhở khách satisfied
+3. Reply TẤT CẢ reviews (cả xấu) — cho thấy chủ active
+
+Target: 50+ reviews, 4.5+ stars trong 3 tháng."
+"user","Sẽ làm ngay. Team tôi: bếp trưởng Hoàng (10 năm kinh nghiệm), quản lý Linh (em gái tôi), 15 nhân viên chia đều cho 3 cơ sở."
+"assistant","Hoàng 10 năm là asset quan trọng. Anh có kế hoạch giữ chân Hoàng không? Bếp trưởng giỏi hay bị offer cao hơn."
+"user","Hoàng được 18 triệu/tháng cộng 3% revenue Hoàn Kiếm (~5.4 triệu thêm). Tổng ~23-24 triệu."
+"assistant","Package tốt! Recommend formalize thỏa thuận bằng văn bản để tránh misunderstanding. Vợ anh có tham gia business không?"
+"user","Vợ tôi Thảo, 33 tuổi, có background kế toán — giúp quản lý tài chính. Chúng tôi có 2 con: bé Khoa 7 tuổi và bé An 4 tuổi."
+"assistant","Thảo làm kế toán là lý tưởng! Family business với vợ là CFO — trust và alignment cao. Anh có balance được time giữa gia đình và nhà hàng không?"
+"user","Khó, nhà hàng tối rất bận. Tôi cố sáng thứ 7 và chủ nhật cho con. Thảo nhiều lúc phàn nàn tôi về nhà muộn."
+"assistant","Vấn đề phổ biến với F&B — peak hours trùng với family time. Anh có thể delegate nhiều hơn cho Linh và shift managers để step away sau 8pm một vài ngày/tuần không?"
+"user","Tôi cần build trust với Linh hơn. Hiện tại tôi vẫn micromanage quá nhiều. Đó là điều tôi cần cải thiện."
+"assistant","Self-awareness đó là bước đầu tiên! Micromanagement cản trở cả team lẫn anh. Thử bắt đầu với 1-2 decisions nhỏ mỗi tuần hoàn toàn giao cho Linh, observe kết quả."

@@ -156,23 +156,16 @@ func (s *RESTServer) handleAppendMessages(c *gin.Context) {
 		return
 	}
 
-	// Push to embedder stream
-	mp := model.MessagePayload{
-		MessageID: msg.ID,
-		UserID:    msg.UserID,
-		TenantID:  msg.TenantID,
-		SessionID: msg.SessionID,
-	}
-	if b, err := json.Marshal(mp); err == nil {
-		_ = s.cache.XAddEmbedderTask(ctx, string(b))
-	}
-
 	// Update cache
 	s.cache.AppendMessages(ctx, req.TenantID, req.SessionID, []model.Message{msg})
 
-	// Check cognitive batch size limit
+	// Check cognitive batch size limit — only user turns drive the counter so that
+	// CognitiveBatch=N means N user messages (≈ N conversation turns) per LLM call.
 	cfg := config.Get()
-	count, err := s.cache.IncrementCognitiveBatch(ctx, req.TenantID, req.SessionID)
+	var count int64
+	if req.Role == "user" {
+		count, err = s.cache.IncrementCognitiveBatch(ctx, req.TenantID, req.SessionID)
+	}
 	if err == nil && count >= int64(cfg.CognitiveBatch) {
 		// Publish event to trigger batch processing
 		s.cache.ResetCognitiveBatch(ctx, req.TenantID, req.SessionID)
@@ -181,7 +174,7 @@ func (s *RESTServer) handleAppendMessages(c *gin.Context) {
 			"tenant_id":       req.TenantID,
 			"user_id":         req.UserID,
 			"session_id":      req.SessionID,
-			"batch_size":      count,
+			"batch_size":      count * 2, // user turns × 2 to include paired assistant messages
 			"last_message_id": msg.ID.String(),
 		}
 		if b, err := json.Marshal(batchPayload); err == nil {
@@ -261,14 +254,14 @@ func (s *RESTServer) handleGetContext(c *gin.Context) {
 	latency := time.Since(start).Milliseconds()
 
 	// Initialize nil slices to avoid null in JSON
+	if bundle.SelfFacts == nil {
+		bundle.SelfFacts = make([]model.EntityFact, 0)
+	}
 	if bundle.RecentMessages == nil {
 		bundle.RecentMessages = make([]model.Message, 0)
 	}
 	if bundle.EntityFacts == nil {
 		bundle.EntityFacts = make([]model.EntityFact, 0)
-	}
-	if bundle.SemanticMessages == nil {
-		bundle.SemanticMessages = make([]model.SemanticMessage, 0)
 	}
 	if bundle.UpcomingEvents == nil {
 		bundle.UpcomingEvents = make([]model.MemoryRecord, 0)
@@ -278,19 +271,17 @@ func (s *RESTServer) handleGetContext(c *gin.Context) {
 	for _, m := range bundle.RecentMessages {
 		totalTokens += m.TokenCount
 	}
-	for _, sm := range bundle.SemanticMessages {
-		totalTokens += len(sm.Content) / 4
-	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"recent_messages":   bundle.RecentMessages,
-		"entity_facts":      bundle.EntityFacts,
-		"semantic_messages": bundle.SemanticMessages,
-		"persona_context":   bundle.Persona,
-		"upcoming_events":   bundle.UpcomingEvents,
-		"total_tokens":      totalTokens,
-		"latency_ms":        latency,
-		"is_partial":        false,
+		"self_facts":      bundle.SelfFacts,
+		"recent_messages": bundle.RecentMessages,
+		"entity_facts":    bundle.EntityFacts,
+		"persona_context": bundle.Persona,
+		"upcoming_events": bundle.UpcomingEvents,
+		"context_string":  formatBundle(bundle),
+		"total_tokens":    totalTokens,
+		"latency_ms":      latency,
+		"is_partial":      false,
 	})
 }
 
@@ -445,7 +436,7 @@ func (s *RESTServer) flushPreviousUserSessions(ctx context.Context, tenantID, us
 			"tenant_id":       tenantID,
 			"user_id":         userID,
 			"session_id":      sessID,
-			"batch_size":      int(count),
+			"batch_size":      int(count) * 2, // user turns × 2 to include paired assistant messages
 			"last_message_id": lastMsgID,
 		}
 		if b, err := json.Marshal(batchPayload); err == nil {
@@ -636,45 +627,78 @@ func (s *RESTServer) handleGetContextFormatted(c *gin.Context) {
 }
 
 // formatBundle converts a ContextBundle into a plain-text string suitable for
-// direct injection into an LLM system prompt. Each section is separated by a
-// blank line. Empty sections are omitted.
+// direct injection into an LLM system prompt. No scores or metadata — only
+// semantic content the model needs. Each section is separated by a blank line;
+// empty sections are omitted.
 func formatBundle(bundle *service.ContextBundle) string {
 	var sb strings.Builder
 
+	// Identity (self-facts): always first so the LLM grounds "I" before reading third-party facts.
+	if len(bundle.SelfFacts) > 0 {
+		sb.WriteString("## Identity\n")
+		for _, f := range bundle.SelfFacts {
+			fmt.Fprintf(&sb, "- %s: %s\n", f.Attribute, f.Value)
+		}
+		sb.WriteString("\n")
+	}
+
+	// Entity Facts (third-party): "- EntityName.attribute: value"
 	if len(bundle.EntityFacts) > 0 {
 		sb.WriteString("## Entity Facts\n")
 		for _, f := range bundle.EntityFacts {
-			fmt.Fprintf(&sb, "- %s (%s) \u2014 %s: %s\n", f.EntityName, f.EntityType, f.Attribute, f.Value)
+			fmt.Fprintf(&sb, "- %s.%s: %s\n", f.EntityName, f.Attribute, f.Value)
 		}
 		sb.WriteString("\n")
 	}
 
-	if len(bundle.RecentMessages) > 0 {
-		sb.WriteString("## Recent Messages\n")
-		for _, m := range bundle.RecentMessages {
-			fmt.Fprintf(&sb, "[%s]: %s\n", m.Role, m.Content)
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(bundle.SemanticMessages) > 0 {
-		sb.WriteString("## Semantic Matches\n")
-		for _, sm := range bundle.SemanticMessages {
-			fmt.Fprintf(&sb, "- %s\n", sm.Content)
-		}
-		sb.WriteString("\n")
-	}
-
-	if bundle.Persona != nil && len(bundle.Persona.Payload) > 0 {
-		sb.WriteString("## Persona\n")
-		sb.WriteString(string(bundle.Persona.Payload))
-		sb.WriteString("\n\n")
-	}
-
+	// Life Events: parse payload to extract event_name and date
 	if len(bundle.UpcomingEvents) > 0 {
-		sb.WriteString("## Upcoming Events\n")
+		sb.WriteString("## Life Events\n")
 		for _, e := range bundle.UpcomingEvents {
-			fmt.Fprintf(&sb, "- %s\n", string(e.Payload))
+			var p map[string]interface{}
+			if err := json.Unmarshal(e.Payload, &p); err == nil {
+				name, _ := p["event_name"].(string)
+				if name == "" {
+					name, _ = p["title"].(string)
+				}
+				if name == "" {
+					name, _ = p["content"].(string)
+				}
+				date, _ := p["date"].(string)
+				if date == "" {
+					date, _ = p["period"].(string)
+				}
+				if name != "" {
+					if date != "" {
+						fmt.Fprintf(&sb, "- %s (%s)\n", name, date)
+					} else {
+						fmt.Fprintf(&sb, "- %s\n", name)
+					}
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Persona: one entry per trait row, each payload = {"trait":"..."}
+	if len(bundle.Persona) > 0 {
+		sb.WriteString("## Persona\n")
+		for _, rec := range bundle.Persona {
+			var p map[string]interface{}
+			if err := json.Unmarshal(rec.Payload, &p); err == nil {
+				if trait, ok := p["trait"].(string); ok && trait != "" {
+					fmt.Fprintf(&sb, "- %s\n", strings.TrimSpace(trait))
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Recent conversation
+	if len(bundle.RecentMessages) > 0 {
+		sb.WriteString("## Recent Conversation\n")
+		for _, m := range bundle.RecentMessages {
+			fmt.Fprintf(&sb, "%s: %s\n", strings.ToUpper(m.Role), m.Content)
 		}
 		sb.WriteString("\n")
 	}

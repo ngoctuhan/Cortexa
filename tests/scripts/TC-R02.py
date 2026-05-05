@@ -6,11 +6,12 @@ Input/Setup: GetContext called 100ms after AppendMessages; entity extractor not 
 Expected Result: Last 2 raw messages present in bundle regardless of extraction state
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

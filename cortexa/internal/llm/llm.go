@@ -519,23 +519,91 @@ func (c *AzureOpenAIClient) Embed(ctx context.Context, text string) ([]float32, 
 	return make([]float32, 1536), nil
 }
 
-func NewClient() Client {
-	// Azure OpenAI takes priority when endpoint is configured.
-	if endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT"); endpoint != "" {
-		key := os.Getenv("AZURE_OPENAI_KEY")
-		chatDep := os.Getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
-		embedDep := os.Getenv("AZURE_OPENAI_EMBED_DEPLOYMENT")
-		if key == "" || chatDep == "" || embedDep == "" {
-			log.Fatal("AZURE_OPENAI_ENDPOINT is set but AZURE_OPENAI_KEY, AZURE_OPENAI_CHAT_DEPLOYMENT, or AZURE_OPENAI_EMBED_DEPLOYMENT is missing")
+// newAzureClient constructs an AzureOpenAIClient from environment variables,
+// fatally logging if any required variable is absent.
+func newAzureClient() Client {
+	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
+	key := os.Getenv("AZURE_OPENAI_KEY")
+	chatDep := os.Getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
+	embedDep := os.Getenv("AZURE_OPENAI_EMBED_DEPLOYMENT")
+	if endpoint == "" || key == "" || chatDep == "" || embedDep == "" {
+		log.Fatal("azure provider selected but one or more required env vars are missing: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_CHAT_DEPLOYMENT, AZURE_OPENAI_EMBED_DEPLOYMENT")
+	}
+	return NewAzureOpenAIClient(endpoint, key, chatDep, embedDep, os.Getenv("AZURE_OPENAI_API_VERSION"))
+}
+
+// MockClient is a no-op LLM client that returns a minimal valid cognitive/experience
+// JSON response immediately without any network call. Use LLM_PROVIDER=mock for local
+// testing of batch/reclaim logic.
+type MockClient struct{}
+
+const mockCognitiveResponse = `{"facts":[],"events":[],"persona_updates":[]}`
+const mockExperienceResponse = `{"experiences":[]}`
+
+func (m *MockClient) Generate(_ context.Context, req LLMRequest) (string, int, error) {
+	// Pick the right stub based on what the prompt looks like.
+	for _, msg := range req.Messages {
+		if strings.Contains(msg.Content, "experience") || strings.Contains(msg.Content, "behavior") {
+			return mockExperienceResponse, 10, nil
 		}
-		return NewAzureOpenAIClient(endpoint, key, chatDep, embedDep, os.Getenv("AZURE_OPENAI_API_VERSION"))
 	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+	return mockCognitiveResponse, 10, nil
+}
+
+func (m *MockClient) Embed(_ context.Context, _ string) ([]float32, error) {
+	return make([]float32, 1536), nil
+}
+
+func (m *MockClient) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	result := make([][]float32, len(texts))
+	for i := range result {
+		result[i] = make([]float32, 1536)
+	}
+	return result, nil
+}
+
+func (m *MockClient) ModelName() string { return "mock" }
+
+// NewClient constructs the active LLM client.
+//
+// Provider selection order:
+//  1. If LLM_PROVIDER is set (mock | gemini | openai | azure), use that provider
+//     explicitly and fatal if the required credentials are absent.
+//  2. Otherwise fall back to auto-detect: azure → openai → gemini.
+func NewClient() Client {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))) {
+	case "mock":
+		log.Println("LLM: using MockClient — no real API calls will be made")
+		return &MockClient{}
+	case "azure":
+		return newAzureClient()
+	case "openai":
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			log.Fatal("LLM_PROVIDER=openai but OPENAI_API_KEY is not set")
+		}
 		return NewOpenAIClient(key)
-	}
-	if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+	case "gemini":
+		key := os.Getenv("GEMINI_API_KEY")
+		if key == "" {
+			log.Fatal("LLM_PROVIDER=gemini but GEMINI_API_KEY is not set")
+		}
 		return NewGeminiClient(key)
+	case "":
+		// Auto-detect by priority: azure > openai > gemini
+		if os.Getenv("AZURE_OPENAI_ENDPOINT") != "" {
+			return newAzureClient()
+		}
+		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+			return NewOpenAIClient(key)
+		}
+		if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+			return NewGeminiClient(key)
+		}
+		log.Fatal("no LLM API key configured: set LLM_PROVIDER and credentials, or set AZURE_OPENAI_ENDPOINT / OPENAI_API_KEY / GEMINI_API_KEY")
+		return nil
+	default:
+		log.Fatalf("LLM_PROVIDER=%q is invalid; valid values are: mock, gemini, openai, azure", os.Getenv("LLM_PROVIDER"))
+		return nil
 	}
-	log.Fatal("no LLM API key configured: set AZURE_OPENAI_ENDPOINT, OPENAI_API_KEY, or GEMINI_API_KEY")
-	return nil
 }

@@ -1,0 +1,77 @@
+"role","content"
+"user","Minh đây. Tôi đang bị bug với Go Kafka consumer — message đôi khi bị process 2 lần khi restart service."
+"assistant","Classic at-least-once delivery issue! Bạn đang dùng auto-commit offset hay manual commit?"
+"user","Auto-commit. Code tôi dùng goroutine để handleMessage mà không commit sau khi xong."
+"assistant","Đó là vấn đề rồi. Auto-commit chạy theo interval (default 5s), không theo completion của handleMessage. Giải pháp: switch sang FetchMessage + manual CommitMessages sau khi xử lý thành công."
+"user","Bạn có thể viết example code không?"
+"assistant","Đây:
+```go
+func (c *Consumer) processMessages(ctx context.Context) {
+    sem := make(chan struct{}, 10)
+    var wg sync.WaitGroup
+    for {
+        msg, err := c.reader.FetchMessage(ctx)
+        if err != nil { break }
+        sem <- struct{}{}; wg.Add(1)
+        go func(m kafka.Message) {
+            defer wg.Done()
+            defer func() { <-sem }()
+            if err := c.handleMessage(m); err == nil {
+                c.reader.CommitMessages(ctx, m)
+            }
+        }(msg)
+    }
+    wg.Wait()
+}
+```"
+"user","Rất tốt! Bạn giải thích step-by-step như này tôi rất dễ hiểu. Tôi thích kiểu giải thích có reasoning kèm code."
+"assistant","Ghi nhận! Tôi sẽ luôn giải thích reasoning trước, rồi mới đến code với bạn."
+"user","handleMessage gọi external API, đôi khi timeout. Nên dùng context như thế nào?"
+"assistant","Dùng context.Background() cho external call, không inherit từ parent Kafka context:
+```go
+extCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+defer cancel()
+result, err := c.externalAPI.Call(extCtx, data)
+```
+Lý do: cancel parent context không nên kill in-flight API calls."
+"user","Ah hiểu rồi — parent context scope là Kafka loop, không nên leak vào external calls. Cảm ơn! Tuần tới tôi có tech talk về Kafka best practices, bạn giúp outline không?"
+"assistant","Outline 45 phút:
+1. Kafka fundamentals (5 min)
+2. Production pitfalls — offset, rebalance, consumer lag (15 min)
+3. Performance tuning — batch size, linger.ms, compression (10 min)
+4. Observability — metrics, alerting (10 min)
+5. Q&A (5 min)
+
+Bạn muốn expand phần nào?"
+"user","Phần observability. Tôi muốn nói về consumer lag monitoring cụ thể."
+"assistant","Consumer lag monitoring:
+- Metric cốt lõi: kafka_consumer_group_lag per topic-partition
+- Tool: Kafka Lag Exporter (Prometheus), Burrow
+- Alert threshold: lag > 10k messages và tăng liên tục 5 phút = có vấn đề
+- Lag spike pattern: đột ngột = processing slowdown; steady increase = under-provisioned consumers
+- Dashboard: Grafana template cho Kafka consumer lag"
+"user","Hay lắm! Một câu nữa: tôi cần viết benchmark test để measure throughput của consumer. Template Go benchmark?"
+"assistant","```go
+func BenchmarkConsumerProcessing(b *testing.B) {
+    consumer := setupTestConsumer(b)
+    messages := generateTestMessages(b.N)
+    b.ResetTimer()
+    b.RunParallel(func(pb *testing.PB) {
+        for pb.Next() {
+            msg := messages[rand.Intn(len(messages))]
+            consumer.handleMessage(msg)
+        }
+    })
+}
+```
+Chạy: go test -bench=. -benchmem -count=5 -benchtime=10s"
+"user","Perfect! Bạn có recommend tài liệu về Go performance không?"
+"assistant","Theo thứ tự học:
+1. 'High Performance Go' — Dave Cheney blog
+2. 'Profiling Go Programs' — official Go blog
+3. pprof tool — bắt đầu với go tool pprof -http=:8080 cpu.prof
+4. 'Systems Performance' by Brendan Gregg — nặng nhưng rất deep
+
+Với Kafka: Confluent engineering blog có nhiều posts Go client tuning."
+"user","Cảm ơn bạn rất nhiều! Bạn trả lời rất chi tiết và thực tế, tôi học được nhiều."
+"assistant","Vui vì giúp được Minh! Lần sau có issue Go/Kafka hay cần chuẩn bị talks gì cứ hỏi nhé."

@@ -6,11 +6,12 @@ Input/Setup: Session exceeds 100 messages
 Expected Result: Summarizer triggered; rag_chunk memory_record created with summary; messages trimmed to 50
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

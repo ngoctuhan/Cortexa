@@ -1,0 +1,32 @@
+"role","content"
+"user","Xin chào! Tôi tên là Lan, 23 tuổi, sinh viên năm cuối Khoa học Máy tính tại Đại học Bách khoa Hà Nội."
+"assistant","Chào Lan! Bách khoa là trường kỹ thuật hàng đầu. Bạn đang làm luận văn tốt nghiệp chủ đề gì?"
+"user","Luận văn về Federated Learning cho phát hiện gian lận thanh toán. GVHD là GS. Nguyễn Thanh Hải. Deadline nộp 30/06."
+"assistant","FL for fraud detection — rất thực tiễn! FL giúp train model mà không cần share raw data. Bạn dùng framework nào — Flower, PySyft hay TensorFlow Federated?"
+"user","Tôi dùng Flower (flwr) vì documentation tốt và flexible hơn TFF."
+"assistant","Flower rất clean! Với fraud detection, bạn giải quyết class imbalance như thế nào? Fraud thường <1% data."
+"user","Đang thử SMOTE trước khi train local model. Kết quả không ổn định: precision cao nhưng recall thấp."
+"assistant","High precision, low recall = model conservative, miss nhiều fraud cases. Thử: (1) Focal Loss thay BCE, (2) FedProx thay FedAvg, (3) Weighted aggregation theo fraud sample count. Bạn đã có centralized baseline chưa?"
+"user","Chưa, cần làm baseline comparison. Tôi học tốt nhất khi có ví dụ cụ thể và so sánh — bạn giải thích kiểu đó rất phù hợp với tôi."
+"assistant","Ghi nhận! Tôi sẽ luôn kèm ví dụ và comparison. Bạn đang train trên dataset nào?"
+"user","PaySim synthetic và một phần data thật từ fintech Việt Nam qua GVHD. Data anonymized kỹ. Lab có 4 GPU RTX 3090."
+"assistant","4x RTX 3090 là tốt cho research! PaySim là standard benchmark. Với data thật, đã kiểm tra differential privacy requirements chưa?"
+"user","GVHD nói DP là nice-to-have, không bắt buộc. Tôi viết thesis bằng LaTeX trên VSCode với LaTeX Workshop extension, MacBook M2 14-inch."
+"assistant","M2 Pro chạy PyTorch MPS rất nhanh! Remote SSH vào lab GPU để train nặng là setup tốt. Tips: dùng tmux trên server để session persist. Và Weights & Biases để track experiments."
+"user","Tôi chưa dùng wandb. Bạn có thể guide cách setup không?"
+"assistant","Setup wandb:
+```python
+import wandb
+wandb.init(project='federated-fraud', name='fedprox-run1')
+wandb.log({'loss': loss, 'accuracy': acc, 'round': round_num})
+```
+Đăng ký free tại wandb.ai, pip install wandb, wandb login. Dashboard tự tạo."
+"user","Hay! Tôi sẽ setup ngay hôm nay. Bạn biết papers hay về federated learning for imbalanced data không?"
+"assistant","Papers hay:
+1. 'SCAFFOLD: Stochastic Controlled Averaging for Federated Learning'
+2. 'Tackling the Objective Inconsistency Problem' (FedNova)
+3. 'Federated Learning on Non-IID Data Silos' (survey)
+
+ArXiv search 'federated learning imbalanced fraud' ra nhiều kết quả 2023-2024."
+"user","Cảm ơn! Tôi thấy FL thực sự là hướng đi hay cho privacy-preserving AI."
+"assistant","Đúng vậy! FL là enabling technology cho AI trong healthcare, finance — những domain mà data nhạy cảm và không thể tập trung. Luận văn của bạn rất đúng thời điểm."

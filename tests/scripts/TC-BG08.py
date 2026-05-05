@@ -113,7 +113,7 @@ def run_tests():
     print("Waiting up to 180s for FlusherWorker to pick it up (runs every 1 min)...")
     
     # 4. Wait for extraction
-    found = TestHelpers.wait_for_cognitive_extraction(tenant_id, user_id, session_1, timeout_ms=300000)
+    found = TestHelpers.wait_for_cognitive_extraction(tenant_id, user_id, session_1, query="What is my dog name Fluffy", timeout_ms=300000)
     
     results.append(TestResult(
         test_id="TC-BG08-04",

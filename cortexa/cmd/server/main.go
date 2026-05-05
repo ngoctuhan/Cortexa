@@ -29,14 +29,13 @@ func main() {
 	sessionRepo := repository.NewSessionRepository(db)
 	cache := repository.NewCache(rdb, msgRepo)
 	entityRepo := repository.NewEntityRepository(db)
-	vectorRepo := repository.NewVectorRepository(db)
 	profileRepo := repository.NewProfileRepository(db)
 	memRepo := repository.NewMemoryRepository(db)
 	expRepo := repository.NewExperienceRepository(db)
 	llmClient := llm.NewClient()
 
 	retriever := service.NewContextRetriever(
-		cache, entityRepo, vectorRepo, profileRepo, memRepo, expRepo, llmClient,
+		cache, entityRepo, profileRepo, memRepo, expRepo, llmClient,
 	)
 
 	server := api.NewRESTServer(retriever, msgRepo, sessionRepo, memRepo, expRepo, cache)

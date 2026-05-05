@@ -34,7 +34,6 @@ func main() {
 	msgRepo := repository.NewMessageRepository(db)
 	cache := repository.NewCache(rdb, msgRepo)
 
-	embedder := worker.NewEmbedderWorker(rdb, llmClient)
 	cognitiveWorker := worker.NewCognitiveWorker(rdb, llmClient, cache, entityRepo, memRepo, profileRepo, usageRepo)
 	experienceWorker := worker.NewExperienceWorker(rdb, llmClient, cache, entityRepo, expRepo, profileRepo)
 	flusherWorker := worker.NewFlusherWorker(cache, msgRepo)
@@ -67,8 +66,6 @@ func main() {
 		flusherWorker.Start(1*time.Minute, 30*time.Minute)
 	}()
 
-	log.Println("Starting Embedder Worker...")
-	if err := embedder.Listen(context.Background()); err != nil {
-		log.Fatalf("Embedder worker failed: %v", err)
-	}
+	// Block until context is cancelled.
+	<-context.Background().Done()
 }

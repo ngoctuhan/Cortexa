@@ -1,0 +1,34 @@
+"role","content"
+"user","Lan đây. Tôi vừa nhận offer từ DataMind — AI startup healthcare ở HCM. 18 triệu/tháng + 0.5% stock option. VinAI cũng offer 22 triệu ở Hà Nội. Phải chọn như thế nào?"
+"assistant","Quan trọng nhất: bạn muốn làm research hay applied AI? VinAI = research publications. DataMind = product + real-world impact. Budget-wise VinAI cao hơn base, DataMind có equity upside."
+"user","Tôi thích applied AI — tác động thực tế cao hơn. Healthcare AI nghe hay. Nhưng DataMind ở HCM, xa gia đình và xa Tuấn."
+"assistant","Long-distance relationship là điểm trừ lớn. Đã nói với Tuấn chưa?"
+"user","Rồi, Tuấn nói ủng hộ nhưng thích tôi ở Hà Nội hơn. Thực ra Tuấn cũng đang xem cơ hội ở HCM, nếu tôi đi thì anh ấy có thể chuyển theo."
+"assistant","Nếu cả hai cùng move HCM thì picture khác hẳn! HCM có startup tech ecosystem tốt hơn. Bạn đã visit DataMind office chưa?"
+"user","Chưa, họ invite onsite tuần sau, cover vé máy bay. Tôi chưa bao giờ vào HCM."
+"assistant","Chắc chắn nên đi onsite! Cơ hội xem văn hóa công ty thực tế và lần đầu trải nghiệm HCM. Khi onsite hỏi về: tech stack, tốc độ ship, growth path, team size."
+"user","Tôi sẽ đăng ký. Nếu không đi PhD và không vào 2 offer này, tôi còn option nào khác không?"
+"assistant","Options khác:
+1. Research intern ở Vingroup AI Lab hoặc FPT AI Center (6-12 tháng)
+2. Làm 1-2 năm industry rồi apply PhD
+3. Remote work cho startup nước ngoài từ Hà Nội
+
+Với profile của bạn, cả VinAI lẫn DataMind đều là excellent choices."
+"user","Cảm ơn! Tôi nghĩ tôi sẽ đi onsite DataMind xem thực tế rồi quyết định. Tips gì cho buổi onsite không?"
+"assistant","Onsite tips:
+- Observe không khí văn phòng
+- Talk 1:1 với engineer (không phải HR) về daily workflow
+- Hỏi: 'Điều gì bạn thích nhất và ít thích nhất khi làm ở đây?'
+- Trust your gut feeling sau khi gặp team"
+"user","Ghi nhận! Tuần sau tôi sẽ update bạn. Tôi vừa hoàn thành aggregation server — FL experiments đang chạy. Đang hồi hộp chờ results!"
+"assistant","Exciting! Đây là moment quan trọng trong thesis journey. Bạn theo dõi qua wandb dashboard chứ? Metrics nào bạn expect sẽ cải thiện?"
+"user","Theo dõi qua wandb! Tôi expect recall cải thiện với FedProx + weighted aggregation. Nếu recall tăng >10% so với baseline mà giữ được precision thì đó là contribution tốt."
+"assistant","10% recall improvement trong fraud detection là significant — có thể là several million dollars fraud prevented per year. Đưa số này vào thesis với business impact framing sẽ rất powerful."
+"user","Ý hay! Tôi sẽ thêm section về business impact estimation. Bạn có biết fraud detection accuracy translates to business value như thế nào không?"
+"assistant","Framework đơn giản:
+- Average fraud transaction value × False Negatives prevented per day × 365 = Annual prevented loss
+- Ví dụ: avg fraud = 2 triệu VND, model catch thêm 10 frauds/ngày = 7.3 tỷ VND/năm
+
+Cite số từ NHNN hoặc Napas để ground the estimate."
+"user","Cực hay! Tôi sẽ tìm data từ NHNN. Cảm ơn bạn đã luôn có những góc nhìn practical và deep!"
+"assistant","Bạn đang làm rất tốt Lan — từ technical đến career planning đều rõ ràng và thoughtful. Chúc experiments ra kết quả tốt!"

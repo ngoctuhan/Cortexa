@@ -6,11 +6,12 @@ Input/Setup: DB connection lost; LISTEN/NOTIFY disconnected
 Expected Result: Worker detects error; reconnects within 5s; no messages lost (reprocessed from DB backlog)
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

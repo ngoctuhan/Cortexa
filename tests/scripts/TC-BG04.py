@@ -15,16 +15,7 @@ from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 
 def run_test():
-    # Flush cognitive streams to prevent backlog from delaying extraction
-    try:
-        import redis as _redis
-        _r = _redis.Redis(host="localhost", port=6380, db=0)
-        _streams = _r.keys("*:stream:cognitive")
-        if _streams:
-            _r.delete(*_streams)
-            print(f"[Setup] Cleared {len(_streams)} cognitive stream(s)")
-    except Exception as _e:
-        print(f"[Setup] Stream clear skipped: {_e}")
+    # No global stream cleanup — test uses a fresh tenant UUID so there is no stale backlog.
     tenant_id, user_id, session_id = TestHelpers.generate_ids()
 
     # Step 1: Send message with birthday information

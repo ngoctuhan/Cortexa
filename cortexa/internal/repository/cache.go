@@ -122,17 +122,6 @@ func (c *Cache) XAddCognitiveBatch(ctx context.Context, tenantID, payload string
 	}).Err()
 }
 
-// XAddEmbedderTask enqueues a new message for embedding.
-func (c *Cache) XAddEmbedderTask(ctx context.Context, payload string) error {
-	stream := "global:stream:embedder"
-	return c.redis.XAdd(ctx, &redis.XAddArgs{
-		Stream: stream,
-		MaxLen: 100000,
-		Approx: true,
-		Values: map[string]interface{}{"payload": payload, "retries": "0"},
-	}).Err()
-}
-
 func (c *Cache) reloadAndAppend(ctx context.Context, key, tenantID, sessionID string, msgs []model.Message) error {
 	// Warm the cache from DB before appending the new messages so that
 	// subsequent GetRawMessages calls return a complete recent-message window.

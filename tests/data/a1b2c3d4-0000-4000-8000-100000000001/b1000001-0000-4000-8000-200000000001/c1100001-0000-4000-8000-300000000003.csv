@@ -1,0 +1,32 @@
+"role","content"
+"user","Minh đây. Tôi cần nhắc về một số sự kiện tháng này."
+"assistant","Chắc chắn rồi! Bạn có những sự kiện nào?"
+"user","Ngày 15 tháng này deadline nộp technical design doc cho feature mới. Cả team đang chờ tôi."
+"assistant","Deadline technical design doc ngày 15. Bạn đã bắt đầu draft chưa?"
+"user","Mới bắt đầu. Ngày 20 là sinh nhật em gái tôi — Hà, 25 tuổi. Tôi chưa mua quà."
+"assistant","Sinh nhật Hà ngày 20! Hà học y khoa — tặng gì liên quan công việc hay personal? Budget bao nhiêu?"
+"user","Budget 500k-1 triệu. Tuần trước Hà nói muốn có đồng hồ Daniel Wellington nhưng hơi đắt."
+"assistant","DW trong tầm đó hơi khó — thường 1.5-2 triệu chính hãng. Thay vào đó có thể xem Fossil hoặc voucher Tiki 800k để Hà tự chọn."
+"user","Tôi sẽ tặng voucher Tiki 800k, tiện hơn. Ngày 25 team tôi có team building ở Đà Nẵng, 2 ngày 1 đêm."
+"assistant","Tháng này bận: deadline 15, sinh nhật Hà 20, team building Đà Nẵng 25-26. Công ty lo vé máy bay chưa?"
+"user","Công ty lo hết. Cuối tháng ngày 30 tôi về Hải Phòng thăm bố mẹ, thường lệ hàng tháng."
+"assistant","Summary:
+- 15/05: Deadline tech design doc
+- 20/05: Sinh nhật Hà (voucher Tiki 800k)
+- 25-26/05: Team building Đà Nẵng
+- 30/05: Về Hải Phòng"
+"user","Cảm ơn! À tôi đang plan đi Nhật tháng 8 với bạn bè — Tuấn và Quân. 7 ngày, Tokyo và Osaka."
+"assistant","Nhật tháng 8 là peak season (Obon). Apply visa sớm — ít nhất 2 tháng trước. Passport hạn không?"
+"user","Passport hạn đến 2028. Visa chưa làm. Budget nhóm tôi khoảng 30-35 triệu/người bao gồm vé máy bay."
+"assistant","Budget 30-35 triệu 7 ngày Nhật là vừa đủ. Vé khứ hồi VN-Tokyo tầm 8-12 triệu nếu book sớm. JR Pass 7 ngày khoảng 5 triệu — rất đáng cho Tokyo + Osaka. Apply visa tháng 6, cần bank statement 3 tháng."
+"user","Tôi sẽ để Tuấn lo visa vì Tuấn cẩn thận hơn tôi. Bạn có gợi ý itinerary Nhật 7 ngày không?"
+"assistant","7 ngày Tokyo-Kyoto-Osaka:
+- Ngày 1-3: Tokyo (Shinjuku, Shibuya, Asakusa, Akihabara)
+- Ngày 4: Kamakura day trip
+- Ngày 5: Shinkansen đến Kyoto (Fushimi Inari, Kinkakuji)
+- Ngày 6: Nara day trip + Osaka
+- Ngày 7: Osaka (Dotonbori, mua sắm Shinsaibashi)
+
+Budget ăn uống ~1-1.5 triệu VND/ngày là comfortable."
+"user","Perfect! Tôi sẽ share itinerary này với Tuấn và Quân. Cảm ơn bạn."
+"assistant","Chúc chuyến đi Nhật vui vẻ! Đặt vé sớm nhất có thể để có giá tốt."

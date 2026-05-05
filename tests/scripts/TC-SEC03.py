@@ -4,8 +4,9 @@ Name: Security Test
 Category: Security
 """
 
-import sys
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 def run_test():

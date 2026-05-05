@@ -1,0 +1,29 @@
+"role","content"
+"user","Chào! Tôi nhận được cơ hội từ investor tên Khoa, 42 tuổi, quản lý quỹ F&B. Muốn rót 2 tỷ đồng cho 20% equity Phở Bắc. Buổi gặp thứ 5 tuần sau."
+"assistant","2 tỷ cho 20% → valuation 10 tỷ. Với doanh thu 4.56 tỷ/năm, P/Revenue ~2.2x — reasonable cho F&B chain có growth potential. Anh cần chuẩn bị gì?"
+"user","Tôi không biết EBITDA là gì. Profit hàng tháng khoảng 50-60 triệu. Thảo quản lý tài chính nhưng chưa present kiểu investor-ready."
+"assistant","EBITDA = operating profit trước adjustments tài chính. Với 380 triệu doanh thu và 50-60 triệu profit, EBITDA margin ~13-16% — khá tốt cho F&B.
+
+Thảo cần chuẩn bị: P&L statement 12 tháng monthly, balance sheet, cash flow statement."
+"user","Sẽ nhờ Thảo làm ngay. Tôi lo vì đây là lần đầu deal với investor. Bạn có thể roleplay buổi gặp không?"
+"assistant","Tôi đóng vai investor Khoa:
+
+Khoa: Chào anh Hùng! Anh có thể pitch Phở Bắc cho tôi — tại sao khác với hàng trăm quán phở khác ở Hà Nội?"
+"user","Phở Bắc khác vì tập trung authentic Bắc kỳ recipe. Bếp trưởng Hoàng 10 năm học từ các cụ bà Hà Nội gốc. Nước dùng ninh 18 tiếng, không dùng bột ngọt. Quy trình chuẩn hóa để consistent across 3 cơ sở."
+"assistant","Khoa: Standardization là key để scale — tốt! Với 2 tỷ, anh plan mở bao nhiêu cơ sở? Timeline?"
+"user","2 cơ sở trong 18 tháng — Tây Hồ và Long Biên. Chi phí mỗi cơ sở 600-700 triệu. Còn lại cho marketing và technology upgrade."
+"assistant","Khoa: 'Technology upgrade' — cụ thể là gì? Và quality control khi scale — Hoàng có đảm đương được không?"
+"user","Technology: POS mới và đặt bàn online. Quality: Hoàng train bếp trưởng mới mỗi cơ sở, checklist kiểm tra hàng tuần."
+"assistant","Khoa: Honest answer — good! Câu khó: exit strategy của anh trong 5 năm tới là gì?
+
+(Pause roleplay — đây là câu investor hay hỏi làm founder lúng túng. Anh đã nghĩ về exit chưa?)"
+"user","Thực ra chưa nghĩ đến exit. Tôi chỉ muốn grow business. Phải trả lời thế nào?"
+"assistant","Answer honest và reasonable:
+
+'Tôi tập trung organic growth — mục tiêu 5 năm là 8-10 cơ sở, EBITDA 18-20%, xem xét acquisition bởi F&B group lớn hoặc franchise model. Về dilution: tôi cam kết không raise thêm trong 24 tháng, và offer right of first refusal cho anh trước mọi vòng sau.'"
+"user","20% equity có nhiều quá không? Tôi muốn negotiate xuống 15%."
+"assistant","2 tỷ/15% → valuation 13.3 tỷ (~2.9x revenue) — aggressive cho F&B VN.
+
+Strategy: Counter với 17-18% (không nhảy thẳng xuống 15%). Justify bằng: growth trajectory, brand value, standardization đã build. Add milestone-based vesting nếu muốn."
+"user","Cảm ơn! Tôi tự tin hơn rất nhiều. Thứ 5 sau buổi gặp tôi sẽ update kết quả."
+"assistant","Chúc anh Hùng thành công! Mang theo: financial summary, photos 3 cơ sở, menu + USPs, growth plan 5-7 slides. Và nhớ: anh cũng đang evaluate investor — hỏi về track record và value-add của họ. Good luck!"

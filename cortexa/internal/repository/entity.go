@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 
 	"github.com/cortexa/cortexa/internal/config"
@@ -59,6 +60,118 @@ func (r *EntityRepository) QueryCurrent(ctx context.Context, tenantID, userID, s
 			f.Value = decVal
 		}
 
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// SearchByVector retrieves entity facts most semantically similar to the query embedding
+// using HNSW approximate nearest neighbour search on entity_mentions.embedding.
+//
+// Falls back to confidence-sorted full dump when:
+//   - No facts have been embedded yet (embedding IS NULL for all)
+//   - The vector search returns 0 results
+//
+// Returns (facts, usedFallback, error).
+func (r *EntityRepository) SearchByVector(ctx context.Context, tenantID, userID string, embedding []float32, topK int) ([]model.EntityFact, bool, error) {
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, false, err
+	}
+
+	embBytes, _ := json.Marshal(embedding)
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL AND embedding IS NOT NULL
+		ORDER BY embedding <=> $3
+		LIMIT $4
+	`, tenantID, userID, string(embBytes), topK)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	facts, err := scanEntityFacts(rows, tenantID, crypto)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(facts) > 0 {
+		return facts, false, nil
+	}
+
+	// Fallback: no embeddings populated yet — return highest-confidence facts.
+	facts, err = r.queryFactsFallback(ctx, tenantID, userID, crypto)
+	return facts, true, err
+}
+
+// queryFactsFallback returns the top-N highest-confidence facts.
+// Used when embeddings are not yet populated (cold start) or search returns 0.
+func (r *EntityRepository) queryFactsFallback(ctx context.Context, tenantID, userID string, crypto *security.Crypto) ([]model.EntityFact, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL
+		ORDER BY confidence DESC, created_at DESC
+		LIMIT 15
+	`, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEntityFacts(rows, tenantID, crypto)
+}
+
+// UpdateFactEmbeddingsBatch batch-updates entity_mentions.embedding for a set of facts
+// identified by (tenantID, userID, entityName, attribute) — the effective unique key
+// for a current (valid_until IS NULL) fact.
+func (r *EntityRepository) UpdateFactEmbeddingsBatch(ctx context.Context, tenantID, userID string, facts []model.ExtractedFact, embeddings [][]float32) error {
+	if len(facts) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for i, f := range facts {
+		if i >= len(embeddings) || len(embeddings[i]) == 0 {
+			continue
+		}
+		embBytes, _ := json.Marshal(embeddings[i])
+		batch.Queue(`
+			UPDATE entity_mentions
+			SET embedding = $1
+			WHERE tenant_id = $2 AND user_id = $3 AND entity_name = $4 AND attribute = $5 AND valid_until IS NULL
+		`, string(embBytes), tenantID, userID, f.EntityName, f.Attribute)
+	}
+	br := r.db.Pool.SendBatch(ctx, batch)
+	defer br.Close() //nolint:errcheck
+	for i := 0; i < batch.Len(); i++ {
+		if _, err := br.Exec(); err != nil {
+			log.Printf("EntityRepository: UpdateFactEmbeddingsBatch item %d error: %v", i, err)
+		}
+	}
+	return nil
+}
+
+// scanEntityFacts scans pgx rows into EntityFact slice, decrypting value_encrypted.
+func scanEntityFacts(rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close()
+}, tenantID string, crypto *security.Crypto) ([]model.EntityFact, error) {
+	var facts []model.EntityFact
+	for rows.Next() {
+		var f model.EntityFact
+		var enc []byte
+		if err := rows.Scan(&f.EntityName, &f.EntityType, &f.Attribute, &enc, &f.SourceQuote, &f.Confidence); err != nil {
+			continue
+		}
+		decVal, err := crypto.DecryptValue(enc, tenantID)
+		if err != nil {
+			f.Value = "[encrypted]"
+		} else {
+			f.Value = decVal
+		}
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -235,4 +348,213 @@ func (r *EntityRepository) GetTopEntityNames(ctx context.Context, tenantID, user
 		names = append(names, name)
 	}
 	return names, nil
+}
+
+// SearchSelfFacts retrieves all current entity facts where entity_type='self' for the given user.
+// These represent the user's own identity (name, age, gender, job, etc.) and are always returned
+// without any query-based filtering — they are pinned unconditionally into the context bundle.
+func (r *EntityRepository) SearchSelfFacts(ctx context.Context, tenantID, userID string) ([]model.EntityFact, error) {
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL AND entity_type = 'self'
+		ORDER BY confidence DESC, created_at DESC
+	`, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntityFacts(rows, tenantID, crypto)
+}
+
+// ResolveEntities uses FTS (plainto_tsquery) and trigram similarity to find entity names
+// that are mentioned in the query. Only searches plaintext columns (entity_name) —
+// no embedding required. Returns distinct entity names matched.
+//
+// Uses unaccent_immutable() (migration 007) so Postgres hits the GIN FTS index on
+// entity_name instead of falling back to a sequential scan.
+func (r *EntityRepository) ResolveEntities(ctx context.Context, tenantID, userID, query string) ([]string, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT DISTINCT entity_name
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL AND entity_type != 'self'
+		  AND (
+		    to_tsvector('simple', unaccent_immutable(entity_name))
+		      @@ plainto_tsquery('simple', unaccent_immutable($3))
+		    OR
+		    entity_name % $3
+		  )
+		ORDER BY entity_name
+		LIMIT 10
+	`, tenantID, userID, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// QueryFactsByFTS fetches facts for the given entity names, ranked within each entity by
+// ts_rank on (attribute || source_quote) against the query. Returns at most topKPerEntity
+// facts per entity. Used as Phase 2 fallback when entity_mentions.embedding is not populated.
+func (r *EntityRepository) QueryFactsByFTS(ctx context.Context, tenantID, userID, query string, entityNames []string, topKPerEntity int) ([]model.EntityFact, error) {
+	if len(entityNames) == 0 {
+		return nil, nil
+	}
+
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		WITH ranked_facts AS (
+		  SELECT
+		    entity_name, entity_type, attribute, value_encrypted, source_quote, confidence,
+		    ROW_NUMBER() OVER (
+		      PARTITION BY entity_name
+		      ORDER BY
+		        ts_rank(
+		          to_tsvector('simple', unaccent(attribute || ' ' || COALESCE(source_quote, ''))),
+		          plainto_tsquery('simple', unaccent($3))
+		        ) DESC,
+		        confidence DESC,
+		        created_at DESC
+		    ) AS rn
+		  FROM entity_mentions
+		  WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL
+		    AND entity_type != 'self'
+		    AND entity_name = ANY($4)
+		)
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM ranked_facts
+		WHERE rn <= $5
+		ORDER BY entity_name, confidence DESC
+	`, tenantID, userID, query, entityNames, topKPerEntity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntityFacts(rows, tenantID, crypto)
+}
+
+// QueryFactsByVector fetches facts for the given entity names, reranked within each entity by
+// cosine distance to the query embedding. Returns at most topKPerEntity facts per entity.
+// Only includes facts that have an embedding populated (by the cognitive worker).
+// Falls back gracefully: if no facts have embeddings, callers should use QueryFactsByFTS.
+func (r *EntityRepository) QueryFactsByVector(ctx context.Context, tenantID, userID string, embedding []float32, entityNames []string, topKPerEntity int) ([]model.EntityFact, error) {
+	if len(entityNames) == 0 || len(embedding) == 0 {
+		return nil, nil
+	}
+
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	embBytes, _ := json.Marshal(embedding)
+
+	rows, err := r.db.Pool.Query(ctx, `
+		WITH ranked_facts AS (
+		  SELECT
+		    entity_name, entity_type, attribute, value_encrypted, source_quote, confidence,
+		    ROW_NUMBER() OVER (
+		      PARTITION BY entity_name
+		      ORDER BY embedding <=> $3, confidence DESC, created_at DESC
+		    ) AS rn
+		  FROM entity_mentions
+		  WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL
+		    AND entity_type != 'self'
+		    AND entity_name = ANY($4)
+		    AND embedding IS NOT NULL
+		)
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM ranked_facts
+		WHERE rn <= $5
+		ORDER BY entity_name, rn
+	`, tenantID, userID, string(embBytes), entityNames, topKPerEntity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntityFacts(rows, tenantID, crypto)
+}
+
+// SearchAllFactsByVector is the query-aware fallback when Phase 1 FTS resolves no entity
+// names. It runs cosine similarity over all third-party facts that have embeddings,
+// returning the topK most relevant. Callers should fall back to FallbackFacts when this
+// returns an empty slice (embeddings not yet populated by the worker).
+func (r *EntityRepository) SearchAllFactsByVector(ctx context.Context, tenantID, userID string, embedding []float32, topK int) ([]model.EntityFact, error) {
+	if len(embedding) == 0 {
+		return nil, nil
+	}
+
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	embBytes, _ := json.Marshal(embedding)
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL
+		  AND entity_type != 'self'
+		  AND embedding IS NOT NULL
+		ORDER BY embedding <=> $3
+		LIMIT $4
+	`, tenantID, userID, string(embBytes), topK)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntityFacts(rows, tenantID, crypto)
+}
+
+// FallbackFacts returns the highest-confidence third-party facts ordered by confidence.
+// Used only as a last resort when both FTS entity resolution and vector search are
+// unavailable (cold start: no embeddings populated yet, or embedding call failed).
+func (r *EntityRepository) FallbackFacts(ctx context.Context, tenantID, userID string, limit int) ([]model.EntityFact, error) {
+	cfg := config.Get()
+	crypto, err := security.NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT entity_name, entity_type, attribute, value_encrypted, source_quote, confidence
+		FROM entity_mentions
+		WHERE tenant_id = $1 AND user_id = $2 AND valid_until IS NULL AND entity_type != 'self'
+		ORDER BY confidence DESC, created_at DESC
+		LIMIT $3
+	`, tenantID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntityFacts(rows, tenantID, crypto)
 }

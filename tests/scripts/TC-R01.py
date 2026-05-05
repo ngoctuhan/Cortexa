@@ -6,11 +6,12 @@ Input/Setup: User says 'email Đức là duc@gmail.com'; immediately asks 'email
 Expected Result: ContextBundle.RecentMessages contains the fact; entity_mentions extraction may not be done yet but answer is still correct
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

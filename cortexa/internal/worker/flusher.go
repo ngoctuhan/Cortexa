@@ -50,7 +50,7 @@ func (w *FlusherWorker) Stop() {
 
 func (w *FlusherWorker) runFlushCycle(olderThan time.Duration) {
 	ctx := context.Background()
-	
+
 	// Distributed Lock: Prevent multiple Pods from running the flush cycle concurrently
 	lockKey := "lock:flusher_worker"
 	// TTL is slightly less than the typical 1-minute interval
@@ -100,6 +100,9 @@ func (w *FlusherWorker) runFlushCycle(olderThan time.Duration) {
 }
 
 func (w *FlusherWorker) flushSession(ctx context.Context, tenantID, sessionID string, count int64) {
+	// Inject tenant ID so the pgx pool activates the correct RLS policy.
+	ctx = repository.WithTenantID(ctx, tenantID)
+
 	// Get the latest message ID to use as an anchor
 	msgs, err := w.msgRepo.GetSessionHistory(ctx, tenantID, sessionID, 1, "")
 	if err != nil || len(msgs) == 0 {
@@ -107,7 +110,7 @@ func (w *FlusherWorker) flushSession(ctx context.Context, tenantID, sessionID st
 		_ = w.cache.RemoveSessionActivity(ctx, tenantID, sessionID)
 		return
 	}
-	
+
 	// We need UserID for the payload, which we can get from the message
 	userID := msgs[0].UserID.String()
 	lastMsgID := msgs[0].ID.String()
@@ -119,7 +122,7 @@ func (w *FlusherWorker) flushSession(ctx context.Context, tenantID, sessionID st
 		"tenant_id":       tenantID,
 		"user_id":         userID,
 		"session_id":      sessionID,
-		"batch_size":      int(count),
+		"batch_size":      int(count) * 2, // user turns × 2 to include paired assistant messages
 		"last_message_id": lastMsgID,
 	}
 

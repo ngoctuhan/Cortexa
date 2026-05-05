@@ -8,6 +8,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cortexa/cortexa/internal/config"
@@ -54,6 +55,10 @@ type CognitiveWorker struct {
 	usageRepo   *repository.LLMUsageRepository
 	sem         chan struct{} // limits concurrent LLM calls
 	scanCursor  uint64        // persistent cursor for fair round-robin stream discovery
+	// inFlight tracks message IDs currently being processed so that reclaimPending
+	// does not re-deliver a message that is still running (LLM calls can exceed the
+	// cognitiveRetryIdleTime threshold, which would otherwise trigger spurious retries).
+	inFlight sync.Map
 }
 
 func NewCognitiveWorker(
@@ -91,9 +96,10 @@ const (
 	cognitiveStreamSuffix  = ":stream:cognitive"
 	cognitiveDLQSuffix     = ":stream:cognitive:dlq"
 	// cognitiveRetryIdleTime is how long a message must sit unacknowledged in the
-	// Pending Entry List before XAUTOCLAIM reclaims it for retry. This gives the
-	// previous attempt time to finish and provides natural backoff without a sleep.
-	cognitiveRetryIdleTime = 20 * time.Second
+	// Pending Entry List before XAUTOCLAIM reclaims it for retry. Must be well above
+	// the worst-case LLM latency so that in-flight messages are not prematurely
+	// re-delivered. The inFlight map provides a second line of defence.
+	cognitiveRetryIdleTime = 2 * time.Minute
 )
 
 // Subscribe reads cognitive batch events from every tenant stream via Redis Streams.
@@ -155,9 +161,19 @@ func (w *CognitiveWorker) Subscribe(ctx context.Context) {
 				msgID := msg.ID
 				payload, _ := msg.Values["payload"].(string)
 
+				// Skip if already being processed (can happen when Redis re-delivers
+				// a PEL entry to XREADGROUP before the previous goroutine completes).
+				if _, alreadyRunning := w.inFlight.Load(msgID); alreadyRunning {
+					continue
+				}
+				w.inFlight.Store(msgID, struct{}{})
+
 				go func(s, id, p string) {
 					w.sem <- struct{}{}
-					defer func() { <-w.sem }()
+					defer func() {
+						<-w.sem
+						w.inFlight.Delete(id)
+					}()
 					// Pass retries=0: this is the first delivery from the main loop.
 					// Subsequent retries are handled by reclaimPending which uses
 					// XPendingExt.RetryCount as the authoritative delivery counter.
@@ -245,6 +261,13 @@ func (w *CognitiveWorker) reclaimPending(ctx context.Context) {
 				continue
 			}
 			for _, p := range pending {
+				// Skip messages that are currently being processed by another goroutine.
+				// The inFlight map is the primary guard; the 2-minute idle threshold is
+				// the secondary guard for genuinely crashed/hung workers.
+				if _, alreadyRunning := w.inFlight.Load(p.ID); alreadyRunning {
+					continue
+				}
+
 				// RetryCount is the number of times Redis has delivered this entry.
 				// Subtract 1 to get "previous attempts" (consistent with retries param).
 				tenantPart := strings.SplitN(stream, cognitiveStreamSuffix, 2)[0]
@@ -263,9 +286,13 @@ func (w *CognitiveWorker) reclaimPending(ctx context.Context) {
 					continue
 				}
 				payload, _ := msgs[0].Values["payload"].(string)
+				w.inFlight.Store(p.ID, struct{}{})
 				w.sem <- struct{}{}
 				go func(s, id, pl string, r int) {
-					defer func() { <-w.sem }()
+					defer func() {
+						<-w.sem
+						w.inFlight.Delete(id)
+					}()
 					w.handleStreamMessage(ctx, s, id, pl, r)
 				}(stream, p.ID, payload, retries)
 			}
@@ -423,6 +450,11 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 			log.Printf("CognitiveWorker %s encrypt fact %q: %v", tag, f.EntityName, err)
 			continue
 		}
+		// Gap#2: source_quote is critical for FTS retrieval. Log when absent so
+		// we can track LLM extraction quality without breaking the write path.
+		if f.SourceQuote == "" {
+			log.Printf("CognitiveWorker %s fact upserted without source_quote: entity=%q attr=%q", tag, f.EntityName, f.Attribute)
+		}
 		batchFacts = append(batchFacts, f)
 		batchEncVals = append(batchEncVals, encVal)
 		batchValHashes = append(batchValHashes, security.ValueHash(f.Value))
@@ -430,6 +462,23 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 	if len(batchFacts) > 0 {
 		if err := w.entityRepo.UpsertFactBatch(ctx, mp, batchFacts, batchEncVals, batchValHashes); err != nil {
 			log.Printf("CognitiveWorker %s upsert facts error: %v", tag, err)
+		}
+
+		// Embed all facts in one batch call and store in entity_mentions.embedding.
+		// Text format: "entityName attribute value" — gives the embedding semantic meaning.
+		factTexts := make([]string, len(batchFacts))
+		for i, f := range batchFacts {
+			factTexts[i] = f.EntityName + " " + f.Attribute + " " + f.Value
+		}
+		embedCtx, embedCancel := context.WithTimeout(ctx, 10*time.Second)
+		embeddings, embedErr := w.llm.EmbedBatch(embedCtx, factTexts)
+		embedCancel()
+		if embedErr != nil {
+			log.Printf("CognitiveWorker %s embed facts error (non-fatal): %v", tag, embedErr)
+		} else {
+			if updateErr := w.entityRepo.UpdateFactEmbeddingsBatch(ctx, mp.TenantID.String(), mp.UserID.String(), batchFacts, embeddings); updateErr != nil {
+				log.Printf("CognitiveWorker %s update fact embeddings error: %v", tag, updateErr)
+			}
 		}
 	}
 
@@ -445,7 +494,10 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 		eventPayloads = append(eventPayloads, string(payloadBytes))
 	}
 	for _, f := range uniqueFacts {
-		if strings.EqualFold(f.Attribute, "birthday") || strings.EqualFold(f.Attribute, "anniversary") {
+		attrLower := strings.ToLower(f.Attribute)
+		isBirthdayAttr := attrLower == "birthday" || attrLower == "anniversary" ||
+			attrLower == "sinh nhật" || attrLower == "ngày sinh" || attrLower == "ngày sinh nhật"
+		if isBirthdayAttr {
 			eventName := "Sinh nhật " + f.EntityName
 			if strings.EqualFold(f.EntityType, "self") || strings.EqualFold(f.EntityName, "user") {
 				eventName = "Sinh nhật của tôi"
@@ -464,9 +516,33 @@ func (w *CognitiveWorker) processBatchPayload(ctx context.Context, payload strin
 
 	// --- 3. Process Persona Updates ---
 	if len(respObj.PersonaUpdates) > 0 {
-		err := w.memRepo.UpsertPersona(ctx, mp.TenantID.String(), mp.UserID.String(), mp.SessionID.String(), respObj.PersonaUpdates)
+		insertedIDs, err := w.memRepo.UpsertPersona(ctx, mp.TenantID.String(), mp.UserID.String(), mp.SessionID.String(), respObj.PersonaUpdates)
 		if err != nil {
 			log.Printf("CognitiveWorker %s upsert persona error: %v", tag, err)
+		}
+		// Embed only newly inserted traits so each record has a searchable vector.
+		// insertedIDs are in the same order as the non-blank, non-duplicate entries
+		// from PersonaUpdates, so we zip them by iterating PersonaUpdates in order.
+		if len(insertedIDs) > 0 {
+			insertedTraits := make([]string, 0, len(insertedIDs))
+			for _, t := range respObj.PersonaUpdates {
+				t = strings.TrimSpace(t)
+				if t == "" {
+					continue
+				}
+				insertedTraits = append(insertedTraits, t)
+				if len(insertedTraits) == len(insertedIDs) {
+					break
+				}
+			}
+			embedCtx, embedCancel := context.WithTimeout(ctx, 10*time.Second)
+			personaEmbeddings, embedErr := w.llm.EmbedBatch(embedCtx, insertedTraits)
+			embedCancel()
+			if embedErr != nil {
+				log.Printf("CognitiveWorker %s embed persona error (non-fatal): %v", tag, embedErr)
+			} else if updateErr := w.memRepo.UpdatePersonaEmbeddingsBatch(ctx, mp.TenantID.String(), insertedIDs, personaEmbeddings); updateErr != nil {
+				log.Printf("CognitiveWorker %s update persona embeddings error: %v", tag, updateErr)
+			}
 		}
 	}
 

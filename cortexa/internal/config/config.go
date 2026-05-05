@@ -29,6 +29,18 @@ const (
 	MaxRecentMsgsLimit = 200
 )
 
+// LLMProvider identifies which LLM backend to use.
+// Valid values: "gemini", "openai", "azure". Empty string = auto-detect by priority (azure > openai > gemini).
+type LLMProvider string
+
+const (
+	LLMProviderAuto   LLMProvider = ""
+	LLMProviderMock   LLMProvider = "mock"
+	LLMProviderGemini LLMProvider = "gemini"
+	LLMProviderOpenAI LLMProvider = "openai"
+	LLMProviderAzure  LLMProvider = "azure"
+)
+
 type Config struct {
 	DatabaseURL          string
 	DBMaxConns           int32
@@ -40,9 +52,10 @@ type Config struct {
 	CognitiveBatch       int
 	CognitiveConcurrency int
 	ExperiencePrompt     string
-	DecayIntervalHours   int // How often to run the memory decay job (hours)
-	DecayAfterDays       int // Decay records not accessed within this many days
-	RecentMessagesLimit  int // Max messages returned in recent_messages per GetContext call
+	DecayIntervalHours   int         // How often to run the memory decay job (hours)
+	DecayAfterDays       int         // Decay records not accessed within this many days
+	RecentMessagesLimit  int         // Max messages returned in recent_messages per GetContext call
+	LLMProvider          LLMProvider // Explicit LLM provider; empty = auto-detect
 }
 
 var (
@@ -168,6 +181,15 @@ func Get() *Config {
 			log.Fatalf("Failed to load experience prompt from %s: %v", experiencePromptPath, err)
 		}
 
+		// Load optional LLM provider preference
+		llmProvider := LLMProvider(os.Getenv("LLM_PROVIDER"))
+		switch llmProvider {
+		case LLMProviderAuto, LLMProviderMock, LLMProviderGemini, LLMProviderOpenAI, LLMProviderAzure:
+			// valid
+		default:
+			log.Fatalf("LLM_PROVIDER=%q is invalid; valid values are: mock, gemini, openai, azure (or leave empty for auto-detect)", llmProvider)
+		}
+
 		instance = &Config{
 			DatabaseURL:          dbURL,
 			DBMaxConns:           int32(dbMaxConns),
@@ -182,6 +204,7 @@ func Get() *Config {
 			DecayIntervalHours:   decayIntervalHours,
 			DecayAfterDays:       decayAfterDays,
 			RecentMessagesLimit:  recentMessagesLimit,
+			LLMProvider:          llmProvider,
 		}
 	})
 

@@ -6,11 +6,12 @@ Input/Setup: Session with 60 messages; append 1 more
 Expected Result: Redis list trimmed to last 50; oldest 11 messages not in cache
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

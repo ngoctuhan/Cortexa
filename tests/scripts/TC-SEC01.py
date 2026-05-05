@@ -6,10 +6,11 @@ Input/Setup: Write entity fact with value=0912345678
 Expected Result: value_encrypted is BYTEA; value_hash is SHA-256
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

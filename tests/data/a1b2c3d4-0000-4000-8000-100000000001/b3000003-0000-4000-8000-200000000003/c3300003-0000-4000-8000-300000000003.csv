@@ -1,0 +1,34 @@
+"role","content"
+"user","Hùng đây. Tôi có vấn đề nhân sự: nhân viên Bình ở Cầu Giấy hay đi muộn và thái độ với khách không tốt. Đã nhắc 2 lần miệng, vẫn tái phạm."
+"assistant","Đã nhắc 2 lần miệng mà vẫn tái phạm — cần escalate lên cảnh báo văn bản. Anh có biết nguyên nhân Bình đi muộn không?"
+"user","Chưa hỏi. Quản lý nói Bình mất hứng, hay nhìn điện thoại. Tôi sẽ gặp Bình trực tiếp ngày mai."
+"assistant","Gợi ý cho buổi gặp: mở đầu bằng 'tôi muốn hiểu tình hình', hỏi về khó khăn cá nhân, nêu facts cụ thể (đi muộn X lần, khách complain ngày Y), rồi state expectations rõ ràng. Outcome: cảnh báo văn bản + commitment từ Bình."
+"user","Tôi không giỏi HR, hay tránh xung đột. Nhưng tôi hiểu phải làm. Bên cạnh đó, Linh em gái tôi đang có xung đột với quản lý Hoàng Mai tên Phương về giờ mở cửa."
+"assistant","Giờ mở cửa — operational decision. Phương muốn thay đổi gì?"
+"user","Phương muốn dời từ 6h lên 7h vì ít khách sáng sớm. Linh không đồng ý, sợ mất khách đi làm sớm. Hai người cãi nhau."
+"assistant","Hai vấn đề: (1) Quyết định giờ mở cửa — cần data revenue 6-7h. (2) Nhận xét inappropriate của Phương về family dynamics — cần address riêng. Anh là người quyết định, không phải Linh hay Phương."
+"user","Tôi sẽ check data doanh thu 6-7h trong 3 tháng. Nếu <5% doanh thu ngày, tôi đồng ý với Phương nhưng yêu cầu Phương xin lỗi Linh."
+"assistant","Data-driven và fair! Khi communicate: frame là 'quyết định của anh dựa trên data', không phải 'Linh đúng/sai'. Giữ face cho cả hai."
+"user","Đúng. Tôi cũng cần viết rõ role & responsibility — hiện tại informal quá. Bạn có template RACI không?"
+"assistant","RACI matrix cho chuỗi 3 cơ sở:
+| Decision | Owner (Hùng) | GM (Linh) | Quản lý cơ sở | Head Chef |
+|---|---|---|---|---|
+| Menu changes | A | C | I | R |
+| Staff hire/fire | A | R | C | I |
+| Daily operations | I | C | R | - |
+| Pricing | A | R | C | C |
+| Hours | A | C | R | I |"
+"user","Rất hữu ích! Cuối tháng này là kỷ niệm 5 năm mở Hoàn Kiếm — 1/6/2018. Tôi muốn celebrate với staff và khách VIP."
+"assistant","5 năm anniversary! Ideas:
+
+Staff: team dinner sau giờ, recognize early employees, gift áo đồng phục mới
+
+Khách VIP: special menu 'original recipes from 2018', discount 18% ngày 1/6
+
+PR: Dũng làm mini-documentary về hành trình 5 năm
+
+Budget anh dự kiến bao nhiêu?"
+"user","Budget khoảng 30-40 triệu cho toàn bộ event. Tôi muốn đây là event ý nghĩa với team, không chỉ về marketing."
+"assistant","Điều quan trọng nhất: recognize và thank những người đã gắn bó từ đầu — Hoàng, Linh. Kể câu chuyện hành trình 5 năm với những khó khăn và milestone — authentic hơn nhiều so với event thuần marketing."
+"user","Tôi sẽ viết letter của founder chia sẻ với toàn team về hành trình. Cảm ơn bạn!"
+"assistant","Founder's letter — cảm động và memorable! Năm 5 là cột mốc quan trọng để reflect và reset direction. Chúc anh Hùng và Phở Bắc tiếp tục phát triển!"

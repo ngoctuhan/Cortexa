@@ -1,0 +1,37 @@
+"role","content"
+"user","Hùng đây. POS Cukcuk của tôi hay bị chậm lúc peak hours 11h-1h trưa và 6h-8h tối. Nhân viên phải viết tay order, rất loạn."
+"assistant","7 POS total, bottleneck peak hours — thường do server sync hoặc DB locking. Anh dùng cloud hay local server? Đã liên hệ Cukcuk support chưa?"
+"user","Cloud, gói Standard. Chưa gọi support vì ngại. Bạn recommend alternatives không?"
+"assistant","Trước khi switch (tốn kém + disruptive), thử gọi Cukcuk hotline báo lỗi cụ thể. Nếu vẫn không fix:
+- KiotViet: phổ biến nhất VN, nhiều features F&B, ~500k/tháng/cơ sở
+- Sapo POS: UI tốt, tích hợp GrabFood/ShopeeFood native"
+"user","Tôi sẽ gọi Cukcuk và book demo KiotViet + Sapo tuần sau. Tôi muốn dùng AI để phân tích POS data tối ưu menu. Có thực tế không?"
+"assistant","Short-term khả thi ngay:
+- Phân tích doanh thu theo giờ, ngày, món
+- Happy hour pricing giờ thấp điểm
+- Cắt món bán <5% trong 3 tháng
+
+AI/ML phức tạp: cần nhiều data + tech. Bắt đầu với basic analytics từ POS export trước."
+"user","Tôi chưa bao giờ analyze POS data seriously. Chỉ xem tổng doanh thu. Bạn guide basic analytics không?"
+"assistant","5 metrics cần pull hàng tuần:
+1. Revenue by hour
+2. Revenue by day of week
+3. Top/bottom 10 items sold
+4. Average check size per location
+5. Table turnover rate
+
+Pull 3 tháng gần nhất từ Cukcuk export → Google Sheets."
+"user","Vợ Thảo giỏi Sheets hơn nhiều vì background kế toán. Thảo hay nói muốn contribute nhiều hơn nhưng không muốn full-time vì bé Khoa và bé An còn nhỏ."
+"assistant","Giải pháp win-win: Thảo làm CFO part-time 2-3 tiếng/ngày, flexible hours. Analytics + finance. Title 'Co-founder & CFO' cũng hay cho family business brand."
+"user","Tôi thích idea đó! Sẽ nói với Thảo tối nay. Ngày 20/6 là sinh nhật bé Khoa tròn 8 tuổi. Thảo muốn tổ chức tiệc ở Hoàn Kiếm sau giờ đóng cửa."
+"assistant","Sinh nhật Khoa tại Hoàn Kiếm sau 10pm — private space hoàn toàn! Khoa thích chủ đề gì?"
+"user","Khoa đang mê khủng long — dinosaur! An thì mê Doraemon."
+"assistant","Tiệc dinosaur cho Khoa:
+- Decor: balloons xanh lá + banner 'Roar! Khoa 8 tuổi'
+- Bánh: đặt bánh kem hình T-Rex
+- Menu: phở yêu thích Khoa + pizza/gà rán cho bạn bè
+- Games: dinosaur egg hunt
+
+Bé An có thể có Doraemon mini cake riêng để không tủi!"
+"user","Ý tưởng tuyệt vời! Bé An sẽ rất vui có bánh Doraemon riêng. Cảm ơn bạn rất nhiều!"
+"assistant","Phở Bắc và gia đình anh đều đang phát triển tốt! Tiếp tục vừa xây business vừa dành thời gian cho gia đình nhé anh Hùng."

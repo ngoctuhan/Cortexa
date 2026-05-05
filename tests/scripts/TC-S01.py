@@ -6,11 +6,12 @@ Input/Setup: POST 3 messages (user/assistant/user) to new sessionID
 Expected Result: HTTP 200, messages stored in DB with correct role/content/ts; Redis list populated with last 50
 """
 
-import sys
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/Users/macbook/Documents/Cortexa/tests')
+
 from test_utils import APIClient, TestHelpers, Assertions, run_test_wrapper
 
 

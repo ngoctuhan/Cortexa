@@ -7,6 +7,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -30,19 +31,34 @@ const (
 	experienceMaxRetries = 3
 	// experienceRetryIdleTime mirrors the cognitive worker's idle backoff duration.
 	experienceRetryIdleTime = 60 * time.Second
+	// experiencePeriodicEvery bypasses the keyword gate every N batches per user
+	// so that factual / planning conversations still produce experiences.
+	experiencePeriodicEvery = 3
 )
 
 // tier1Keywords are cheap string signals indicating a learning moment.
-// If none found in the last experienceTier1Depth messages, skip LLM call.
+// Keywords cover both explicit correction/instruction patterns AND broader
+// advice-seeking and knowledge-sharing signals common in planning conversations.
 var tier1Keywords = []string{
-	// Vietnamese
+	// Vietnamese — correction / instruction
 	"lần sau", "nhớ", "luôn luôn", "luôn ", "không phải", "thay vào đó",
 	"đúng rồi", "chính xác", "gần rồi", "không đúng", "sai rồi",
 	"cần phải", "nên ", "thay vì", "tốt hơn nếu", "từ nay",
-	// English
+	// Vietnamese — advice-seeking / learning / insight (planning conversations)
+	"tôi không biết", "mình không biết", "à ra vậy", "à ra thế",
+	"tôi hiểu", "mình hiểu", "tôi học", "mình học", "hay đó",
+	"cảm ơn", "giúp tôi", "giúp mình", "tư vấn", "gợi ý",
+	"nên làm gì", "làm thế nào", "như thế nào", "có cách nào",
+	"vấn đề là", "khó khăn", "thách thức", "lo lắng",
+	// English — correction / instruction
 	"next time", "always ", "remember", "instead", "that's right",
 	"exactly", "not like that", "you should", "please always",
 	"going forward", "from now on", "in the future", "don't do",
+	// English — advice-seeking / learning / insight
+	"i don't know", "i didn't know", "i see", "i understand",
+	"can you help", "how do i", "what should", "any advice",
+	"the problem is", "struggling", "challenge", "worried",
+	"thank you", "thanks", "got it", "makes sense",
 }
 
 // reJsonBlock matches the outermost JSON object in an LLM response,
@@ -69,6 +85,7 @@ type ExperienceWorker struct {
 	expRepo     *repository.ExperienceRepository
 	profileRepo *repository.ProfileRepository
 	sem         chan struct{}
+	batchCount  atomic.Int64 // counts processPayload calls; used for periodic bypass
 }
 
 // NewExperienceWorker creates a new ExperienceWorker.
@@ -263,14 +280,22 @@ func (w *ExperienceWorker) processPayload(ctx context.Context, payload string) e
 	}
 
 	// --- TIER 1: keyword scan on last experienceTier1Depth messages (zero LLM cost) ---
+	// Bypass the keyword gate every experiencePeriodicEvery calls so that
+	// factual/planning conversations still produce experiences over time.
+	callN := w.batchCount.Add(1)
+	periodicBypass := callN%experiencePeriodicEvery == 0
+
 	scanDepth := experienceTier1Depth
 	if len(chronological) < scanDepth {
 		scanDepth = len(chronological)
 	}
 	recentSlice := chronological[len(chronological)-scanDepth:]
 
-	if !hasTier1Signal(recentSlice) {
-		return nil // no signal → skip entirely
+	if !periodicBypass && !hasTier1Signal(recentSlice) {
+		return nil // no signal and not a periodic call → skip
+	}
+	if periodicBypass {
+		log.Printf("ExperienceWorker %s periodic bypass (call #%d)", tag, callN)
 	}
 
 	// --- TIER 2: find correction boundary, build smart slice, call LLM ---
