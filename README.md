@@ -7,7 +7,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?style=flat&logo=postgresql)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![p99 Latency](https://img.shields.io/badge/p99%20Latency-%3C100ms-brightgreen.svg)]()
+[![Parallel Retrieval](https://img.shields.io/badge/Retrieval-Parallel_Queries-brightgreen.svg)]()
 
 *Drop-in memory layer for any AI chat system — RAG, entity extraction, and structured memory in one service*
 
@@ -17,7 +17,7 @@
 
 ## Overview
 
-Cortexa is a self-hosted **Memory and Context Manager (MCM)** you can integrate with any AI chat system. Rather than building memory from scratch, you point your chat backend at Cortexa's two REST endpoints and get rich, multi-layered context back in under 100ms.
+Cortexa is a self-hosted **Memory and Context Manager (MCM)** you can integrate with any AI chat system. Rather than building memory from scratch, you point your chat backend at Cortexa's two REST endpoints and get rich, multi-layered context back efficiently.
 
 It combines three retrieval strategies in a single service:
 
@@ -29,7 +29,7 @@ It combines three retrieval strategies in a single service:
 
 | Feature | Description |
 |---------|-------------|
-| **Sub-100ms p99 Latency** | Parallel queries with a soft timeout ensure fast responses |
+| **Parallel Retrieval** | Parallel DB queries and LLM embedding calls ensure fast context generation |
 | **PII Encryption** | AES-GCM encryption with per-tenant derived keys |
 | **Atomic Fact Upsert** | CTE-based supersede prevents duplicate entity facts under concurrent writes |
 | **Tenant Isolation** | Row-Level Security (RLS) enforces strict data separation |
@@ -44,7 +44,7 @@ It combines three retrieval strategies in a single service:
 
 ## Architecture
 
-![](docs/architecture.png)
+![Architecture](/docs/architecture.png)
 
 ### Data Flow
 
@@ -73,19 +73,24 @@ sequenceDiagram
 
     Note over API,Cache: every N messages - COGNITIVE_BATCH_SIZE
     API->>Cache: XAdd to tenant:stream:cognitive with last_message_id
-    Cache-->>COG: XReadGroup consumer group workers
-    COG->>Cache: GetRawMessagesUntil anchorMsgID
-    COG->>LLM: extract entities, events, persona
-    COG->>DB: CTE UPSERT encrypted facts and events
-    COG->>Cache: XAck on success or leave in PEL on error
+    
+    par parallel worker processing
+        Cache-->>COG: XReadGroup consumer group workers
+        COG->>Cache: GetRawMessagesUntil anchorMsgID (fallback to DB)
+        COG->>LLM: extract entities, events, persona
+        COG->>DB: CTE UPSERT encrypted facts and events
+        COG->>LLM: EmbedBatch extracted facts
+        COG->>DB: UPDATE fact embeddings
+        COG->>Cache: XAck on success or leave in PEL on error
+        
+        Cache-->>EXP: XReadGroup consumer group exp-workers
+        EXP->>Cache: GetRawMessagesUntil anchorMsgID (fallback to DB)
+        EXP->>LLM: keyword scan, then extract behavior if signal found
+        EXP->>DB: UPSERT experience vector and steps
+        EXP->>Cache: XAck on success or leave in PEL on error
+    end
 
-    Cache-->>EXP: XReadGroup consumer group exp-workers
-    EXP->>Cache: GetRawMessagesUntil anchorMsgID
-    EXP->>LLM: detect learning signal and extract behavior
-    EXP->>DB: UPSERT experience vector and steps
-    EXP->>Cache: XAck on success or leave in PEL on error
-
-    Note over COG,EXP: reclaimPending every 30s - reclaim PEL idle over 60s - skip after 3 retries
+    Note over COG,EXP: reclaimPending reclaims idle PEL messages (COG: 20s/8 retries, EXP: 60s/3 retries)
 ```
 
 #### Read path
@@ -100,17 +105,19 @@ sequenceDiagram
 
     Client->>API: POST /v1/context
     API->>Cache: GET recent messages newest-first up to RECENT_MESSAGES_LIMIT
-
-    par parallel 150 ms soft timeout
+    
+    par parallel context retrieval (QueryTimeout 2s, EmbedTimeout 5s)
         API->>LLM: Embed query
         LLM-->>API: query embedding
-        API->>DB: vector search pgvector HNSW
-        API->>DB: entity facts valid_until IS NULL ORDER BY created_at ASC
-        API->>DB: persona and upcoming events
-        API->>DB: experiences cosine sim above 0.4 top 3
+        
+        note over API, DB: Wait for embedding, then query DB
+        API->>DB: vector search pgvector HNSW for semantic_messages
+        API->>DB: vector search for entity_facts (fallback to full dump)
+        API->>DB: vector search for persona & events (fallback to full dump)
+        API->>DB: vector search for experiences (cosine sim above 0.4 top 3)
     end
 
-    API->>API: merge and decrypt PII and rerank
+    API->>API: merge, decrypt PII, apply time decay, and rerank
     API-->>Client: Context Bundle
 ```
 
